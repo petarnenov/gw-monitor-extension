@@ -494,17 +494,60 @@ async function startDeploy() {
     }
 }
 
+function renderDeployLog(logLines) {
+    const logEl = document.getElementById('deploy-log');
+    logEl.innerHTML = logLines.map(line => linkifyCommands(escapeHtml(line))).join('\n');
+    // Bind click handlers for executable commands
+    logEl.querySelectorAll('.exec-cmd').forEach(el => {
+        el.addEventListener('click', () => execCommand(el.dataset.cmd, el));
+    });
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+const CMD_PATTERN = /(?:^\s*|:\s+)((?:tail|head|cat|df|du|ls|cd|git|\.\/gradlew|ps|free|uptime)\s[^\n]{5,})/g;
+
+function linkifyCommands(safeLine) {
+    return safeLine.replace(CMD_PATTERN, (match, cmd) => {
+        const trimmed = cmd.trim();
+        return match.replace(cmd, `<span class="exec-cmd" data-cmd="${trimmed}" title="Click to run">${trimmed}</span>`);
+    });
+}
+
+async function execCommand(cmd, el) {
+    el.classList.add('exec-running');
+    el.textContent = cmd + ' (running...)';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/exec`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cmd }),
+            signal: AbortSignal.timeout(35000),
+        });
+        const data = await res.json();
+        el.classList.remove('exec-running');
+        el.textContent = cmd;
+
+        // Insert result block after the command line
+        const resultEl = document.createElement('div');
+        resultEl.className = 'exec-result' + (data.ok ? '' : ' exec-result-err');
+        resultEl.textContent = data.output;
+        el.closest('.exec-cmd')?.after(resultEl) || el.parentElement.appendChild(resultEl);
+    } catch (e) {
+        el.classList.remove('exec-running');
+        el.textContent = cmd + ' (error: ' + e.message + ')';
+    }
+}
+
 async function streamDeployLog() {
     const baseUrl = await getApiUrl();
-    const logEl = document.getElementById('deploy-log');
     const btn = document.getElementById('deploy-btn');
 
     try {
         const es = new EventSource(`${baseUrl}/deploy/stream`);
         es.onmessage = (e) => {
             const data = JSON.parse(e.data);
-            logEl.textContent = data.log.join('\n');
-            logEl.scrollTop = logEl.scrollHeight;
+            renderDeployLog(data.log);
         };
         es.addEventListener('done', () => {
             es.close();
@@ -519,21 +562,18 @@ async function streamDeployLog() {
             btn.textContent = 'Deploy';
         };
     } catch {
-        // Fallback: poll
         pollDeployLog();
     }
 }
 
 async function pollDeployLog() {
     const baseUrl = await getApiUrl();
-    const logEl = document.getElementById('deploy-log');
     const btn = document.getElementById('deploy-btn');
     const poll = setInterval(async () => {
         try {
             const res = await fetch(`${baseUrl}/deploy/status`);
             const data = await res.json();
-            logEl.textContent = data.log.join('\n');
-            logEl.scrollTop = logEl.scrollHeight;
+            renderDeployLog(data.log);
             if (!data.in_progress) {
                 clearInterval(poll);
                 btn.disabled = false;
@@ -554,7 +594,7 @@ async function checkDeployStatus() {
             document.getElementById('deploy-btn').disabled = true;
             document.getElementById('deploy-btn').textContent = 'Deploying...';
             document.getElementById('deploy-log-wrap').classList.remove('hidden');
-            document.getElementById('deploy-log').textContent = data.log.join('\n');
+            renderDeployLog(data.log);
             streamDeployLog();
         }
     } catch { /* ignore */ }

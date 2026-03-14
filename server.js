@@ -518,6 +518,35 @@ app.put('/config/agent/:name/autostart', (req, res) => {
     }
 });
 
+// ── Command execution ──
+
+const ALLOWED_CMD_PREFIXES = [
+    'tail ', 'head ', 'cat ', 'df ', 'du ', 'ls ', 'wc ',
+    'git -C', 'git stash', 'git status', 'git log', 'git diff',
+    'cd /home/petar/AppServer',
+    './gradlew',
+    'ps ', 'free ', 'uptime',
+];
+
+app.post('/exec', (req, res) => {
+    const cmd = (req.body.cmd || '').trim();
+    if (!cmd) {
+        return res.status(400).json({ ok: false, output: 'No command provided' });
+    }
+    // Security: only allow commands starting with known safe prefixes
+    const baseCmd = cmd.replace(/^\s*cd\s+\S+\s*&&\s*/, '');
+    const allowed = ALLOWED_CMD_PREFIXES.some(p => cmd.startsWith(p) || baseCmd.startsWith(p));
+    if (!allowed) {
+        return res.status(403).json({ ok: false, output: `Command not allowed: ${cmd}` });
+    }
+    try {
+        const output = execSync(cmd, { timeout: 30000, encoding: 'utf8', env: DEPLOY_ENV, cwd: GEO_DIR }).trim();
+        res.json({ ok: true, output: output || '(no output)' });
+    } catch (e) {
+        res.json({ ok: false, output: e.stderr || e.stdout || e.message });
+    }
+});
+
 // ── Log endpoints ──
 
 const TOMCAT_LOGS = `${TOMCAT_HOME}/logs`;

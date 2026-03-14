@@ -470,6 +470,27 @@ section { margin-bottom: 12px; }
   white-space: pre-wrap;
   margin: 0;
 }
+.exec-cmd {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+.exec-cmd:hover { background: var(--accent); color: #fff; text-decoration: none; }
+.exec-running { opacity: 0.6; cursor: wait; }
+.exec-result {
+  background: var(--bg-card);
+  border-left: 3px solid var(--accent);
+  padding: 4px 8px;
+  margin: 2px 0 4px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 150px;
+  overflow: auto;
+}
+.exec-result-err { border-left-color: var(--bar-danger); color: var(--bar-danger); }
 
 /* Log buttons */
 .log-btn {
