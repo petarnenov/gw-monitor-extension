@@ -313,13 +313,13 @@ section { margin-bottom: 12px; }
 
 /* Config cell */
 .config-cell { white-space: nowrap; }
-.config-mem { font-weight: 600; font-size: 13px; }
+.config-mem { font-weight: 600; font-size: 16px; }
 .edit-mem-btn {
   background: none;
   border: 1px solid var(--border-input);
   border-radius: 3px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 16px;
   padding: 0 3px;
   margin-left: 3px;
   cursor: pointer;
@@ -489,8 +489,8 @@ section { margin-bottom: 12px; }
   border: 1px solid var(--border-input);
   border-radius: 3px;
   color: var(--text-secondary);
-  font-size: 14px;
-  padding: 1px 4px;
+  font-size: 16px;
+  padding: 2px 6px;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -501,14 +501,15 @@ section { margin-bottom: 12px; }
   border: 1px solid var(--border-input);
   border-radius: 3px;
   color: var(--text-secondary);
-  font-size: 10px;
-  padding: 1px 4px;
+  font-size: 16px;
+  padding: 2px 6px;
   cursor: pointer;
   transition: all 0.15s;
 }
 .stop-btn-sm:hover { border-color: var(--bar-danger); color: var(--bar-danger); }
 .stop-btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 .action-btns { white-space: nowrap; display: flex; gap: 3px; }
+.row-num { color: var(--text-muted); text-align: center; width: 28px; }
 
 #agent-summary {
   font-size: 15px;

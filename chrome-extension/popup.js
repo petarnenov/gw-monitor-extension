@@ -205,7 +205,8 @@ function render(data, lastCheck) {
         if (a.running !== b.running) return a.running ? -1 : 1;
         return a.name.localeCompare(b.name);
     });
-    for (const a of sorted) {
+    for (let idx = 0; idx < sorted.length; idx++) {
+        const a = sorted[idx];
         const tr = document.createElement('tr');
         if (!a.running) tr.classList.add('agent-stopped');
 
@@ -231,6 +232,7 @@ function render(data, lastCheck) {
         }
 
         tr.innerHTML = `
+            <td class="row-num">${idx + 1}</td>
             <td><strong>${escapeHtml(a.name)}</strong> ${autoToggle}</td>
             <td class="config-cell">
               <span class="config-mem">${configMem}</span>
@@ -455,6 +457,7 @@ async function stopAgent(name, btn) {
         });
         const data = await res.json();
         btn.textContent = data.ok ? '\u2713' : '\u2717';
+        if (data.ok) chrome.runtime.sendMessage({ action: 'agentStopped', name }).catch(() => {});
         if (!data.ok) showError(`Agent "${name}" stop failed: ` + data.message);
     } catch (e) {
         btn.textContent = '\u2717';
@@ -479,6 +482,7 @@ async function restartAgent(name, btn) {
         });
         const data = await res.json();
         btn.textContent = data.ok ? '✓' : '✗';
+        if (data.ok) chrome.runtime.sendMessage({ action: 'agentStarted', name }).catch(() => {});
         if (!data.ok) showError(`Agent "${name}" restart failed: ` + data.message);
     } catch (e) {
         btn.textContent = '✗';

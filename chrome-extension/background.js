@@ -26,8 +26,16 @@ async function checkStatus() {
         const res = await fetch(`${baseUrl}/status`, { signal: AbortSignal.timeout(10000) });
         const data = await res.json();
 
-        // Only monitor agents that should be running (autostart or currently running)
-        const monitored = (data.agents.agents || []).filter(a => a.autostart || a.running);
+        // Only monitor agents that should be running:
+        // - autostart enabled, unless manually stopped
+        // - manually started via the extension
+        const { manuallyStarted = [], manuallyStopped = [] } = await chrome.storage.local.get(['manuallyStarted', 'manuallyStopped']);
+        const monitored = (data.agents.agents || []).filter(a => {
+            if (manuallyStopped.includes(a.name)) return false;
+            if (a.autostart === true) return true;
+            if (manuallyStarted.includes(a.name)) return true;
+            return false;
+        });
         const monitoredHealthy = monitored.filter(a => a.running && a.accessible).length;
         const monitoredTotal = monitored.length;
         const agentsOk = monitoredHealthy === monitoredTotal;
@@ -137,4 +145,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         checkStatus().then(() => sendResponse({ ok: true }));
         return true;
     }
+    if (msg.action === 'agentStarted') {
+        trackManualStart(msg.name).then(() => sendResponse({ ok: true }));
+        return true;
+    }
+    if (msg.action === 'agentStopped') {
+        trackManualStop(msg.name).then(() => sendResponse({ ok: true }));
+        return true;
+    }
 });
+
+async function trackManualStart(name) {
+    const { manuallyStarted = [], manuallyStopped = [] } = await chrome.storage.local.get(['manuallyStarted', 'manuallyStopped']);
+    await chrome.storage.local.set({
+        manuallyStarted: manuallyStarted.includes(name) ? manuallyStarted : [...manuallyStarted, name],
+        manuallyStopped: manuallyStopped.filter(n => n !== name),
+    });
+}
+
+async function trackManualStop(name) {
+    const { manuallyStarted = [], manuallyStopped = [] } = await chrome.storage.local.get(['manuallyStarted', 'manuallyStopped']);
+    await chrome.storage.local.set({
+        manuallyStarted: manuallyStarted.filter(n => n !== name),
+        manuallyStopped: manuallyStopped.includes(name) ? manuallyStopped : [...manuallyStopped, name],
+    });
+}
