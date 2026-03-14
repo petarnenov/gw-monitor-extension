@@ -62,24 +62,35 @@ function getSystemInfo() {
     return { memory, disk, uptime_seconds, load_average, cpus };
 }
 
+const TOMCAT_HOME = '/home/petar/AppServer/apache-tomcat-9.0.38';
+
 function getTomcatStatus() {
     return new Promise((resolve) => {
         const start = Date.now();
         const req = http.get(`http://localhost:${TOMCAT_PORT}/`, { timeout: 5000 }, (res) => {
             res.resume();
             const elapsed = Date.now() - start;
-            const result = {
+            const proc = getTomcatProcess();
+            resolve({
                 http_port: TOMCAT_PORT, http_code: res.statusCode,
                 response_ms: elapsed, running: res.statusCode === 200,
-                process: getTomcatProcess(),
-            };
-            resolve(result);
+                process: proc,
+                threads: getTomcatThreads(proc.pid),
+                jvm: getTomcatJvm(proc.pid),
+                webapps: getDeployedWebapps(),
+                requests_today: getRequestsToday(),
+            });
         });
         req.on('error', () => {
+            const proc = getTomcatProcess();
             resolve({
                 http_port: TOMCAT_PORT, http_code: 0,
                 response_ms: Date.now() - start, running: false,
-                process: getTomcatProcess(),
+                process: proc,
+                threads: getTomcatThreads(proc.pid),
+                jvm: getTomcatJvm(proc.pid),
+                webapps: getDeployedWebapps(),
+                requests_today: getRequestsToday(),
             });
         });
         req.on('timeout', () => { req.destroy(); });
@@ -96,13 +107,76 @@ function getTomcatProcess() {
     if (parts.length < 9) return {};
     const args = parts.slice(8).join(' ');
     const xmxMatch = args.match(/-Xmx(\S+)/);
+    const startedStr = parts.slice(3, 8).join(' ');
+    let uptime_seconds = 0;
+    try {
+        uptime_seconds = Math.floor((Date.now() - new Date(startedStr).getTime()) / 1000);
+    } catch { /* ignore */ }
     return {
         pid: +parts[0],
         rss_kb: +parts[1],
         cpu_pct: parseFloat(parts[2]),
-        started: parts.slice(3, 8).join(' '),
+        started: startedStr,
+        uptime_seconds,
         ...(xmxMatch && { xmx: xmxMatch[1] }),
     };
+}
+
+function getTomcatThreads(pid) {
+    if (!pid) return {};
+    const threadCount = runCmd(`cat /proc/${pid}/status 2>/dev/null | grep Threads | awk '{print $2}'`);
+    const openFds = runCmd(`ls /proc/${pid}/fd 2>/dev/null | wc -l`);
+    const fdLimit = runCmd(`cat /proc/${pid}/limits 2>/dev/null | grep 'Max open files' | awk '{print $4}'`);
+    return {
+        count: parseInt(threadCount, 10) || 0,
+        open_fds: parseInt(openFds, 10) || 0,
+        fd_limit: parseInt(fdLimit, 10) || 0,
+    };
+}
+
+function getTomcatJvm(pid) {
+    if (!pid) return {};
+    try {
+        const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
+        const xmx = cmdline.match(/-Xmx(\S+)/);
+        const xms = cmdline.match(/-Xms(\S+)/);
+        const maxDirect = cmdline.match(/-XX:MaxDirectMemorySize=(\S+)/);
+        const reactorPool = cmdline.match(/-Dworker\.reactorpool\.size=(\d+)/);
+        const akkaSystem = cmdline.match(/-Dakka\.agent\.system\.base\.name=(\S+)/);
+        const devMode = cmdline.includes('-Ddevelopment.mode=true');
+        const gcType = cmdline.match(/-XX:\+Use(\w+)GC/) || cmdline.match(/-XX:\+Use(\w+)/);
+        return {
+            xmx: xmx ? xmx[1] : null,
+            xms: xms ? xms[1] : null,
+            max_direct_memory: maxDirect ? maxDirect[1] : null,
+            reactor_pool_size: reactorPool ? +reactorPool[1] : null,
+            akka_system: akkaSystem ? akkaSystem[1] : null,
+            dev_mode: devMode,
+            gc_type: gcType ? gcType[1] : 'G1 (default)',
+        };
+    } catch {
+        return {};
+    }
+}
+
+function getDeployedWebapps() {
+    try {
+        const dirs = fs.readdirSync(`${TOMCAT_HOME}/webapps`);
+        return dirs.filter(d => {
+            try {
+                return fs.statSync(`${TOMCAT_HOME}/webapps/${d}`).isDirectory();
+            } catch { return false; }
+        });
+    } catch {
+        return [];
+    }
+}
+
+function getRequestsToday() {
+    const today = new Date().toISOString().slice(0, 10);
+    const logFile = `${TOMCAT_HOME}/logs/localhost_access_log.${today}.txt`;
+    const count = runCmd(`wc -l < "${logFile}" 2>/dev/null`);
+    return parseInt(count, 10) || 0;
 }
 
 function getAgents() {

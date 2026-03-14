@@ -9,6 +9,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('refresh-btn').addEventListener('click', refresh);
     document.getElementById('settings-btn').addEventListener('click', toggleSettings);
     document.getElementById('save-url-btn').addEventListener('click', saveUrl);
+    document.getElementById('theme-btn').addEventListener('click', toggleTheme);
+
+    // Apply saved theme
+    await applyTheme();
 
     // Load saved URL into input
     const url = await getApiUrl();
@@ -16,6 +20,38 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await loadAndRender();
 });
+
+async function applyTheme() {
+    const { theme } = await chrome.storage.local.get('theme');
+    const btn = document.getElementById('theme-btn');
+    if (theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        btn.textContent = theme === 'dark' ? '\u2600' : '\u263E';
+    } else {
+        // Auto — follow system preference
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        btn.textContent = prefersDark ? '\u2600' : '\u263E';
+    }
+}
+
+async function toggleTheme() {
+    const { theme } = await chrome.storage.local.get('theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+    let next;
+    if (!theme) {
+        // Auto mode → switch to opposite of system
+        next = prefersDark ? 'light' : 'dark';
+    } else if (theme === 'dark') {
+        next = 'light';
+    } else {
+        next = 'dark';
+    }
+
+    await chrome.storage.local.set({ theme: next });
+    document.documentElement.setAttribute('data-theme', next);
+    document.getElementById('theme-btn').textContent = next === 'dark' ? '\u2600' : '\u263E';
+}
 
 function toggleSettings() {
     const panel = document.getElementById('settings-panel');
@@ -107,13 +143,49 @@ function render(data, lastCheck) {
         `${formatBytes(sys.disk.used)} / ${formatBytes(sys.disk.total)} (${sys.disk.use_pct})`);
 
     const tomOk = tom.running;
+    const proc = tom.process || {};
+    const threads = tom.threads || {};
+    const jvm = tom.jvm || {};
+
     document.getElementById('tomcat-status').innerHTML =
         `<span class="dot ${tomOk ? 'green' : 'red'}"></span>${tomOk ? 'Running' : 'Down'} :${tom.http_port}`;
     document.getElementById('tomcat-response').textContent =
         tomOk ? `${tom.response_ms}ms` : `HTTP ${tom.http_code}`;
-    const proc = tom.process || {};
-    document.getElementById('tomcat-mem').textContent =
-        proc.xmx ? `Xmx ${proc.xmx} | RSS ${formatBytes((proc.rss_kb || 0) * 1024)}` : '';
+    document.getElementById('tomcat-uptime').textContent =
+        proc.uptime_seconds ? formatUptime(proc.uptime_seconds) : '-';
+    document.getElementById('tomcat-requests').textContent =
+        tom.requests_today != null ? tom.requests_today.toLocaleString() : '-';
+
+    // Memory bar — RSS vs Xmx
+    const rssBytes = (proc.rss_kb || 0) * 1024;
+    const xmxBytes = parseXmx(proc.xmx);
+    if (xmxBytes > 0) {
+        setBar('tomcat-mem', rssBytes, xmxBytes,
+            `${formatBytes(rssBytes)} / ${formatBytes(xmxBytes)}`);
+    } else {
+        document.getElementById('tomcat-mem').textContent =
+            rssBytes ? formatBytes(rssBytes) : '-';
+    }
+
+    document.getElementById('tomcat-cpu').textContent =
+        proc.cpu_pct != null ? `${proc.cpu_pct.toFixed(1)}%` : '-';
+    document.getElementById('tomcat-threads').textContent =
+        threads.count ? `${threads.count}` : '-';
+    document.getElementById('tomcat-fds').textContent =
+        threads.open_fds ? `${threads.open_fds} / ${threads.fd_limit.toLocaleString()}` : '-';
+
+    const jvmParts = [];
+    if (jvm.xmx) jvmParts.push(`Xmx ${jvm.xmx}`);
+    if (jvm.max_direct_memory) jvmParts.push(`Direct ${jvm.max_direct_memory}`);
+    if (jvm.gc_type) jvmParts.push(`GC: ${jvm.gc_type}`);
+    if (jvm.reactor_pool_size) jvmParts.push(`Reactor: ${jvm.reactor_pool_size}`);
+    if (jvm.akka_system) jvmParts.push(`Akka: ${jvm.akka_system}`);
+    if (jvm.dev_mode) jvmParts.push('DEV');
+    document.getElementById('tomcat-jvm').textContent = jvmParts.join(' · ') || '-';
+
+    const webapps = tom.webapps || [];
+    document.getElementById('tomcat-webapps').textContent =
+        webapps.length ? webapps.join(', ') : '-';
 
     document.getElementById('agent-summary').textContent =
         `(${ag.healthy}/${ag.total} healthy)`;
@@ -146,6 +218,18 @@ function setBar(id, used, total, text) {
     bar.style.width = pct + '%';
     bar.className = 'bar' + (pct > 90 ? ' danger' : pct > 75 ? ' warn' : '');
     document.getElementById(`${id}-text`).textContent = text;
+}
+
+function parseXmx(val) {
+    if (!val) return 0;
+    const m = val.match(/^(\d+(?:\.\d+)?)\s*([gmk])?$/i);
+    if (!m) return 0;
+    const num = parseFloat(m[1]);
+    const unit = (m[2] || '').toLowerCase();
+    if (unit === 'g') return num * 1e9;
+    if (unit === 'm') return num * 1e6;
+    if (unit === 'k') return num * 1e3;
+    return num;
 }
 
 function formatBytes(bytes) {

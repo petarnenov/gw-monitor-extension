@@ -10,6 +10,7 @@
       <h1>GeoWealth Server</h1>
       <div id="header-right">
         <span id="last-check"></span>
+        <button id="theme-btn" title="Toggle theme">&#x263E;</button>
         <button id="settings-btn" title="Settings">&#x2699;</button>
         <button id="refresh-btn" title="Refresh">&#x21bb;</button>
       </div>
@@ -60,10 +61,48 @@
 
     <section id="tomcat-section">
       <h2>Tomcat</h2>
-      <div class="inline-stats">
-        <span id="tomcat-status"></span>
-        <span id="tomcat-response"></span>
-        <span id="tomcat-mem"></span>
+      <div class="grid-2">
+        <div class="stat-card">
+          <label>Status</label>
+          <span id="tomcat-status"></span>
+        </div>
+        <div class="stat-card">
+          <label>Response</label>
+          <span id="tomcat-response"></span>
+        </div>
+        <div class="stat-card">
+          <label>Uptime</label>
+          <span id="tomcat-uptime"></span>
+        </div>
+        <div class="stat-card">
+          <label>Requests Today</label>
+          <span id="tomcat-requests"></span>
+        </div>
+        <div class="stat-card">
+          <label>Memory (RSS / Xmx)</label>
+          <div class="bar-wrap"><div id="tomcat-mem-bar" class="bar"></div></div>
+          <span id="tomcat-mem"></span>
+        </div>
+        <div class="stat-card">
+          <label>CPU</label>
+          <span id="tomcat-cpu"></span>
+        </div>
+        <div class="stat-card">
+          <label>Threads</label>
+          <span id="tomcat-threads"></span>
+        </div>
+        <div class="stat-card">
+          <label>Open FDs</label>
+          <span id="tomcat-fds"></span>
+        </div>
+        <div class="stat-card full-width">
+          <label>JVM Config</label>
+          <span id="tomcat-jvm"></span>
+        </div>
+        <div class="stat-card full-width">
+          <label>Deployed Apps</label>
+          <span id="tomcat-webapps"></span>
+        </div>
       </div>
     </section>
 
