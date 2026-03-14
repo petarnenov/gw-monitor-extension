@@ -63,6 +63,11 @@ function updateBadge(allOk, healthy, total, unreachable = false) {
     }
 }
 
+// Open in new tab when extension icon is clicked
+chrome.action.onClicked.addListener(() => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+});
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.action === 'refresh') {
         checkStatus().then(() => sendResponse({ ok: true }));

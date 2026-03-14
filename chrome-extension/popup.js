@@ -6,6 +6,7 @@ async function getApiUrl() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+
     document.getElementById('refresh-btn').addEventListener('click', refresh);
     document.getElementById('settings-btn').addEventListener('click', toggleSettings);
     document.getElementById('save-url-btn').addEventListener('click', saveUrl);
@@ -170,7 +171,7 @@ function render(data, lastCheck) {
         setBar('tomcat-mem', rssBytes, xmxBytes,
             `${formatBytes(rssBytes)} / ${formatBytes(xmxBytes)}`);
     } else {
-        document.getElementById('tomcat-mem').textContent =
+        document.getElementById('tomcat-mem-text').textContent =
             rssBytes ? formatBytes(rssBytes) : '-';
     }
 
