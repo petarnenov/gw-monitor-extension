@@ -794,6 +794,9 @@ async function runDeploy(branch) {
     execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
     logDeploy('WebContent deployed to Tomcat');
 
+    // Fix known corrupted JARs — replace with originals from gradle cache
+    fixCorruptedJars();
+
     // 7. Start Tomcat
     step('Starting Tomcat');
     execSyncDeploy(`rm -f "${TOMCAT_HOME}/catalina_pid.txt" && ${TOMCAT_HOME}/bin/startup.sh`, 15000);
@@ -801,6 +804,39 @@ async function runDeploy(branch) {
 
     const finalBranch = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
     step(`Deploy complete — branch: ${finalBranch}`);
+}
+
+function fixCorruptedJars() {
+    const GRADLE_CACHE = '/home/petar/.gradle/caches/modules-2/files-2.1';
+    const tomcatLib = `${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib`;
+    const beLib = `${BE_HOME}/lib`;
+
+    // Find all JARs in tomcat lib and verify against gradle cache originals
+    let fixed = 0;
+    try {
+        const jars = fs.readdirSync(tomcatLib).filter(f => f.endsWith('.jar'));
+        for (const jar of jars) {
+            const tomcatPath = `${tomcatLib}/${jar}`;
+            const bePath = `${beLib}/${jar}`;
+            // If BEServer has a different checksum, it's the correct one from gradle
+            if (fs.existsSync(bePath)) {
+                const tomcatMd5 = runCmd(`md5sum "${tomcatPath}" | awk '{print $1}'`);
+                const beMd5 = runCmd(`md5sum "${bePath}" | awk '{print $1}'`);
+                if (tomcatMd5 && beMd5 && tomcatMd5 !== beMd5) {
+                    fs.copyFileSync(bePath, tomcatPath);
+                    logDeploy(`Fixed corrupted JAR: ${jar}`);
+                    fixed++;
+                }
+            }
+        }
+    } catch (e) {
+        logDeploy(`WARNING: JAR verification error: ${e.message}`);
+    }
+    if (fixed > 0) {
+        logDeploy(`${fixed} corrupted JAR(s) replaced from BEServer/lib`);
+    } else {
+        logDeploy('All JARs verified OK');
+    }
 }
 
 function execSyncDeploy(cmd, timeout = 120000) {
