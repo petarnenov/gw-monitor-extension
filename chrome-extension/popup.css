@@ -90,7 +90,7 @@
 }
 
 body {
-  width: 420px;
+  width: 520px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   font-size: 13px;
   color: var(--text-primary);
@@ -303,6 +303,9 @@ section { margin-bottom: 12px; }
 }
 #agents-table tr:last-child td { border-bottom: none; }
 #agents-table tr:hover td { background: var(--bg-hover); }
+#agents-table .mem-cell { min-width: 100px; }
+#agents-table .mem-cell .bar-wrap { margin: 0 0 2px; }
+#agents-table .mem-label { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 
 /* JVM config compact */
 #tomcat-jvm, #tomcat-webapps {

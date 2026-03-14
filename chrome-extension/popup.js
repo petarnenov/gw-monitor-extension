@@ -195,11 +195,23 @@ function render(data, lastCheck) {
     const sorted = [...ag.agents].sort((a, b) => a.name.localeCompare(b.name));
     for (const a of sorted) {
         const tr = document.createElement('tr');
+        const rssBytes = (a.rss_kb || 0) * 1024;
+        const xmxBytes = parseXmx(a.xmx);
+        const memPct = xmxBytes > 0 ? ((rssBytes / xmxBytes) * 100).toFixed(0) : 0;
+        const memBarClass = memPct > 90 ? 'danger' : memPct > 75 ? 'warn' : '';
+        const memText = xmxBytes > 0
+            ? `${formatBytes(rssBytes)} / ${a.xmx}`
+            : (rssBytes ? formatBytes(rssBytes) : '-');
         tr.innerHTML = `
             <td><strong>${escapeHtml(a.name)}</strong></td>
-            <td>${escapeHtml(a.xmx || '-')}</td>
-            <td>${a.rss_kb ? formatBytes(a.rss_kb * 1024) : '-'}</td>
+            <td class="mem-cell">
+              <div class="bar-wrap"><div class="bar ${memBarClass}" style="width:${memPct}%"></div></div>
+              <span class="mem-label">${memText}</span>
+            </td>
             <td>${a.cpu_pct != null ? a.cpu_pct.toFixed(1) + '%' : '-'}</td>
+            <td>${a.threads || '-'}</td>
+            <td>${a.open_fds || '-'}</td>
+            <td>${a.uptime_seconds ? formatUptime(a.uptime_seconds) : '-'}</td>
             <td><span class="dot ${a.accessible ? 'green' : 'red'}"></span>${a.accessible ? 'OK' : 'DOWN'}</td>
         `;
         tbody.appendChild(tr);

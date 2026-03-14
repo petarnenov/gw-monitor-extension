@@ -216,6 +216,24 @@ function getAgents() {
             const xmx = cmdline.match(/-Xmx(\S+)/);
             if (xmx) a.xmx = xmx[1];
         } catch { /* process gone */ }
+
+        // Uptime — parse "Thu Mar 12 07:02:13 PM EET 2026" format
+        if (a.started) {
+            try {
+                // Remove timezone abbreviation (EET, EEST, etc.) that Node can't parse
+                const cleanDate = a.started.replace(/\s(?:EET|EEST|CET|CEST|UTC|GMT|MSK|IST|EST|CST|PST|EDT|CDT|PDT|WET|WEST)\b/g, '');
+                const parsed = new Date(cleanDate);
+                if (!isNaN(parsed.getTime())) {
+                    a.uptime_seconds = Math.floor((Date.now() - parsed.getTime()) / 1000);
+                }
+            } catch { /* ignore */ }
+        }
+
+        // Threads & FDs
+        const threadCount = runCmd(`cat /proc/${a.pid}/status 2>/dev/null | grep Threads | awk '{print $2}'`);
+        const openFds = runCmd(`ls /proc/${a.pid}/fd 2>/dev/null | wc -l`);
+        if (threadCount) a.threads = parseInt(threadCount, 10) || 0;
+        if (openFds) a.open_fds = parseInt(openFds, 10) || 0;
     }
 
     const total = agents.length;
