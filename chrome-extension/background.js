@@ -80,7 +80,8 @@ async function checkStatus() {
             error: null,
         });
 
-        updateBadge(allOk, monitoredHealthy, monitoredTotal);
+        const downNames = downAgents.map(a => a.name);
+        updateBadge(allOk, monitoredHealthy, monitoredTotal, false, downNames);
     } catch (e) {
         // Notify server unreachable (only on transition)
         if (prevHealthy) {
@@ -120,7 +121,7 @@ function notify(problems) {
     });
 }
 
-function updateBadge(allOk, healthy, total, unreachable = false) {
+function updateBadge(allOk, healthy, total, unreachable = false, downNames = []) {
     if (unreachable) {
         chrome.action.setBadgeText({ text: '!' });
         chrome.action.setBadgeBackgroundColor({ color: '#6B7280' });
@@ -131,7 +132,8 @@ function updateBadge(allOk, healthy, total, unreachable = false) {
     } else {
         chrome.action.setBadgeText({ text: `${healthy}` });
         chrome.action.setBadgeBackgroundColor({ color: '#EF4444' });
-        chrome.action.setTitle({ title: `Issues — ${healthy}/${total} agents healthy` });
+        const names = downNames.length ? '\n⬇ ' + downNames.join(', ') : '';
+        chrome.action.setTitle({ title: `Issues — ${healthy}/${total} agents healthy${names}` });
     }
 }
 
