@@ -610,7 +610,12 @@ async function fetchLogs() {
         const res = await fetch(path, { signal: AbortSignal.timeout(15000) });
         const text = await res.text();
         body.innerHTML = highlightLogErrors(text);
-        body.scrollTop = body.scrollHeight;
+        const lastError = body.querySelector('.log-error-line:last-of-type');
+        if (lastError) {
+            lastError.scrollIntoView({ block: 'center' });
+        } else {
+            body.scrollTop = body.scrollHeight;
+        }
     } catch (e) {
         body.textContent = 'Error fetching logs: ' + e.message;
     }
