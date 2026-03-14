@@ -18,6 +18,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('log-modal-backdrop').addEventListener('click', closeLogViewer);
     document.getElementById('log-refresh-btn').addEventListener('click', refreshLogViewer);
     document.getElementById('log-lines-select').addEventListener('change', refreshLogViewer);
+    document.getElementById('deploy-btn').addEventListener('click', startDeploy);
+    document.getElementById('stash-btn').addEventListener('click', stashChanges);
+    setupTypeahead();
 
     // Apply saved theme
     await applyTheme();
@@ -26,6 +29,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const url = await getApiUrl();
     document.getElementById('server-url-input').value = url;
 
+    await loadBranches();
+    await checkDeployStatus();
     await loadAndRender();
 });
 
@@ -314,6 +319,245 @@ function formatUptime(secs) {
     if (h > 0) parts.push(`${h}h`);
     parts.push(`${m}m`);
     return parts.join(' ');
+}
+
+// ── Deploy ──
+
+let allBranches = [];
+let selectedBranch = '';
+let gitDirty = false;
+
+async function loadBranches() {
+    const baseUrl = await getApiUrl();
+    try {
+        const [brRes, stRes] = await Promise.all([
+            fetch(`${baseUrl}/git/branches`, { signal: AbortSignal.timeout(30000) }),
+            fetch(`${baseUrl}/git/status`, { signal: AbortSignal.timeout(10000) }),
+        ]);
+        const brData = await brRes.json();
+        const stData = await stRes.json();
+
+        allBranches = brData.branches;
+        selectedBranch = brData.current;
+        document.getElementById('branch-input').value = brData.current;
+        document.getElementById('deploy-current').textContent = `Current: ${brData.current}`;
+
+        updateDirtyState(stData.dirty, stData.changes);
+    } catch {
+        document.getElementById('deploy-current').textContent = 'Failed to load branches';
+    }
+}
+
+function updateDirtyState(dirty, changes) {
+    gitDirty = dirty;
+    const dirtyEl = document.getElementById('deploy-dirty');
+    const stashBtn = document.getElementById('stash-btn');
+    const deployBtn = document.getElementById('deploy-btn');
+
+    if (dirty) {
+        dirtyEl.textContent = `${changes} uncommitted change${changes > 1 ? 's' : ''} — stash before deploy`;
+        dirtyEl.classList.remove('hidden');
+        stashBtn.classList.remove('hidden');
+        deployBtn.disabled = true;
+    } else {
+        dirtyEl.classList.add('hidden');
+        stashBtn.classList.add('hidden');
+        deployBtn.disabled = !selectedBranch;
+    }
+}
+
+function setupTypeahead() {
+    const input = document.getElementById('branch-input');
+    const dropdown = document.getElementById('branch-dropdown');
+
+    input.addEventListener('focus', () => showDropdown(input.value));
+    input.addEventListener('input', () => showDropdown(input.value));
+
+    input.addEventListener('keydown', (e) => {
+        const items = dropdown.querySelectorAll('.branch-item');
+        const active = dropdown.querySelector('.branch-item.active');
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (!active && items.length) items[0].classList.add('active');
+            else if (active && active.nextElementSibling) {
+                active.classList.remove('active');
+                active.nextElementSibling.classList.add('active');
+                active.nextElementSibling.scrollIntoView({ block: 'nearest' });
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (active && active.previousElementSibling) {
+                active.classList.remove('active');
+                active.previousElementSibling.classList.add('active');
+                active.previousElementSibling.scrollIntoView({ block: 'nearest' });
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (active) selectBranch(active.dataset.branch);
+            else if (items.length) selectBranch(items[0].dataset.branch);
+            dropdown.classList.add('hidden');
+        } else if (e.key === 'Escape') {
+            dropdown.classList.add('hidden');
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.typeahead-wrap')) dropdown.classList.add('hidden');
+    });
+}
+
+function showDropdown(query) {
+    const dropdown = document.getElementById('branch-dropdown');
+    const q = query.toLowerCase().trim();
+    const filtered = q
+        ? allBranches.filter(b => b.name.toLowerCase().includes(q))
+        : allBranches;
+    const limited = filtered.slice(0, 30);
+
+    if (!limited.length) {
+        dropdown.innerHTML = '<div class="branch-empty">No matches</div>';
+        dropdown.classList.remove('hidden');
+        return;
+    }
+
+    dropdown.innerHTML = limited.map(b =>
+        `<div class="branch-item" data-branch="${escapeHtml(b.name)}">
+            <span class="branch-name">${highlightMatch(b.name, q)}</span>
+            <span class="branch-meta">${escapeHtml(b.date)}</span>
+        </div>`
+    ).join('');
+    dropdown.classList.remove('hidden');
+
+    dropdown.querySelectorAll('.branch-item').forEach(item => {
+        item.addEventListener('click', () => selectBranch(item.dataset.branch));
+    });
+}
+
+function highlightMatch(name, query) {
+    if (!query) return escapeHtml(name);
+    const idx = name.toLowerCase().indexOf(query);
+    if (idx < 0) return escapeHtml(name);
+    return escapeHtml(name.slice(0, idx))
+        + `<strong>${escapeHtml(name.slice(idx, idx + query.length))}</strong>`
+        + escapeHtml(name.slice(idx + query.length));
+}
+
+function selectBranch(name) {
+    selectedBranch = name;
+    document.getElementById('branch-input').value = name;
+    document.getElementById('branch-dropdown').classList.add('hidden');
+    document.getElementById('deploy-btn').disabled = gitDirty || !name;
+}
+
+async function stashChanges() {
+    const btn = document.getElementById('stash-btn');
+    btn.disabled = true;
+    btn.textContent = 'Stashing...';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/git/stash`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+            updateDirtyState(false, 0);
+        } else {
+            showError('Stash failed: ' + data.message);
+        }
+    } catch (e) {
+        showError('Stash error: ' + e.message);
+    }
+    btn.disabled = false;
+    btn.textContent = 'Stash';
+}
+
+async function startDeploy() {
+    if (!selectedBranch) return;
+    if (!confirm(`Deploy branch "${selectedBranch}"?\n\nThis will:\n- Pull latest changes\n- Gradle clean + build\n- Copy artifacts\n- Restart Tomcat`)) return;
+
+    const btn = document.getElementById('deploy-btn');
+    btn.disabled = true;
+    btn.textContent = 'Deploying...';
+    document.getElementById('deploy-log-wrap').classList.remove('hidden');
+    document.getElementById('deploy-log').textContent = 'Starting deploy...';
+
+    const baseUrl = await getApiUrl();
+    try {
+        await fetch(`${baseUrl}/deploy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ branch: selectedBranch }),
+        });
+        streamDeployLog();
+    } catch (e) {
+        document.getElementById('deploy-log').textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+        btn.textContent = 'Deploy';
+    }
+}
+
+async function streamDeployLog() {
+    const baseUrl = await getApiUrl();
+    const logEl = document.getElementById('deploy-log');
+    const btn = document.getElementById('deploy-btn');
+
+    try {
+        const es = new EventSource(`${baseUrl}/deploy/stream`);
+        es.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            logEl.textContent = data.log.join('\n');
+            logEl.scrollTop = logEl.scrollHeight;
+        };
+        es.addEventListener('done', () => {
+            es.close();
+            btn.disabled = false;
+            btn.textContent = 'Deploy';
+            loadBranches();
+            setTimeout(refresh, 3000);
+        });
+        es.onerror = () => {
+            es.close();
+            btn.disabled = false;
+            btn.textContent = 'Deploy';
+        };
+    } catch {
+        // Fallback: poll
+        pollDeployLog();
+    }
+}
+
+async function pollDeployLog() {
+    const baseUrl = await getApiUrl();
+    const logEl = document.getElementById('deploy-log');
+    const btn = document.getElementById('deploy-btn');
+    const poll = setInterval(async () => {
+        try {
+            const res = await fetch(`${baseUrl}/deploy/status`);
+            const data = await res.json();
+            logEl.textContent = data.log.join('\n');
+            logEl.scrollTop = logEl.scrollHeight;
+            if (!data.in_progress) {
+                clearInterval(poll);
+                btn.disabled = false;
+                btn.textContent = 'Deploy';
+                loadBranches();
+                setTimeout(refresh, 3000);
+            }
+        } catch { /* retry */ }
+    }, 2000);
+}
+
+async function checkDeployStatus() {
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/deploy/status`);
+        const data = await res.json();
+        if (data.in_progress) {
+            document.getElementById('deploy-btn').disabled = true;
+            document.getElementById('deploy-btn').textContent = 'Deploying...';
+            document.getElementById('deploy-log-wrap').classList.remove('hidden');
+            document.getElementById('deploy-log').textContent = data.log.join('\n');
+            streamDeployLog();
+        }
+    } catch { /* ignore */ }
 }
 
 // ── Log highlighting ──

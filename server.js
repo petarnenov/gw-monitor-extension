@@ -579,6 +579,260 @@ app.put('/config/agent/:name/memory', (req, res) => {
     }
 });
 
+// ── Deploy / Branch management ──
+
+const GEO_DIR = '/home/petar/AppServer/geowealth';
+const JAVA_HOME = '/home/petar/AppServer/amazon-corretto-17.0.18.9.1-linux-x64';
+const DEPLOY_ENV = {
+    ...process.env,
+    JAVA_HOME,
+    PATH: `${JAVA_HOME}/bin:${process.env.PATH}`,
+    GEO_TEMPLATE_NAME: CONFIG_YML,
+    GEO_ENV,
+    GEO_SERVER,
+};
+
+let deployInProgress = false;
+let deployLog = [];
+
+app.get('/git/branches', (_req, res) => {
+    try {
+        runCmd(`git -C "${GEO_DIR}" fetch --prune 2>/dev/null`, 30000);
+        const current = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
+        const raw = runCmd(`git -C "${GEO_DIR}" branch -r --sort=-committerdate --format="%(refname:short)|%(committerdate:relative)|%(authorname)"`, 15000);
+        const branches = raw.split('\n').filter(Boolean).map(line => {
+            const [ref, date, author] = line.split('|');
+            const name = ref.replace(/^origin\//, '');
+            return { name, date, author };
+        }).filter(b => b.name !== 'HEAD');
+        res.json({ current, branches });
+    } catch (e) {
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
+app.get('/git/status', (_req, res) => {
+    try {
+        const current = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
+        const porcelain = runCmd(`git -C "${GEO_DIR}" status --porcelain`);
+        const dirty = !!porcelain;
+        const changes = porcelain ? porcelain.split('\n').filter(Boolean).length : 0;
+        res.json({ current, dirty, changes });
+    } catch (e) {
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
+app.post('/git/stash', async (_req, res) => {
+    try {
+        const porcelain = runCmd(`git -C "${GEO_DIR}" status --porcelain`);
+        if (!porcelain) {
+            return res.json({ ok: true, message: 'Nothing to stash' });
+        }
+        const output = runCmd(`git -C "${GEO_DIR}" stash push -u -m "extension-stash-${Date.now()}" 2>&1`, 30000);
+        console.log('[git] Stashed:', output);
+        res.json({ ok: true, message: output });
+    } catch (e) {
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
+app.get('/deploy/status', (_req, res) => {
+    res.json({ in_progress: deployInProgress, log: deployLog });
+});
+
+// SSE endpoint for real-time deploy log
+app.get('/deploy/stream', (req, res) => {
+    res.set({
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+    });
+    res.flushHeaders();
+
+    const interval = setInterval(() => {
+        res.write(`data: ${JSON.stringify({ log: deployLog, in_progress: deployInProgress })}\n\n`);
+        if (!deployInProgress) {
+            clearInterval(interval);
+            res.write('event: done\ndata: {}\n\n');
+            res.end();
+        }
+    }, 1000);
+
+    req.on('close', () => clearInterval(interval));
+});
+
+app.post('/deploy', async (req, res) => {
+    if (deployInProgress) {
+        return res.status(409).json({ ok: false, message: 'Deploy already in progress' });
+    }
+    const branch = req.body.branch;
+    if (!branch || !/^[\w\-\/\.]+$/.test(branch)) {
+        return res.status(400).json({ ok: false, message: 'Invalid branch name' });
+    }
+
+    deployInProgress = true;
+    deployLog = [];
+    res.json({ ok: true, message: `Deploy started for branch "${branch}"` });
+
+    try {
+        await runDeploy(branch);
+    } catch (e) {
+        logDeploy(`FAILED: ${e.message}`);
+    } finally {
+        deployInProgress = false;
+    }
+});
+
+function logDeploy(msg) {
+    const ts = new Date().toLocaleTimeString();
+    deployLog.push(`[${ts}] ${msg}`);
+    console.log(`[deploy] ${msg}`);
+}
+
+async function runDeploy(branch) {
+    const step = (name) => logDeploy(`── ${name} ──`);
+
+    // 1. Stash local changes
+    step('Checking for local changes');
+    const status = runCmd(`git -C "${GEO_DIR}" status --porcelain`);
+    let stashed = false;
+    if (status) {
+        logDeploy('Stashing local changes...');
+        runCmd(`git -C "${GEO_DIR}" stash push -u -m "deploy-${Date.now()}"`, 30000);
+        stashed = true;
+    } else {
+        logDeploy('Working directory clean');
+    }
+
+    // 2. Checkout and pull branch
+    step(`Switching to branch: ${branch}`);
+    runCmd(`git -C "${GEO_DIR}" checkout "${branch}" 2>&1`, 30000);
+    logDeploy('Pulling latest...');
+    runCmd(`git -C "${GEO_DIR}" pull origin "${branch}" 2>&1`, 60000);
+
+    // 3. Apply stash
+    if (stashed) {
+        step('Applying stashed changes');
+        try {
+            runCmd(`git -C "${GEO_DIR}" stash pop 2>&1`);
+            logDeploy('Stash applied successfully');
+        } catch {
+            logDeploy('WARNING: Stash had conflicts, cleared. Apply manually: git stash pop');
+            runCmd(`git -C "${GEO_DIR}" checkout -- . 2>/dev/null`);
+        }
+    }
+
+    // 4. Stop Tomcat
+    step('Stopping Tomcat');
+    try { runCmd(`${TOMCAT_HOME}/bin/shutdown.sh 2>&1`, 15000); } catch { /* ok */ }
+    await waitForTomcatStop();
+
+    // 5. Gradle build
+    step('Gradle clean + makebuild');
+    logDeploy('Running ./gradlew clean...');
+    const cleanOut = execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew clean 2>&1`, 120000);
+    logDeploy(lastLines(cleanOut, 3));
+
+    logDeploy('Running ./gradlew makebuild...');
+    const buildOut = execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false 2>&1`, 600000);
+    logDeploy(lastLines(buildOut, 5));
+
+    // 6. Copy artifacts
+    step('Copying artifacts');
+    execSyncDeploy(`
+        cd "${GEO_DIR}" &&
+        rm -rf "${BE_HOME}/lib" "${BE_HOME}/bin" "${BE_HOME}/sbin" "${BE_HOME}/etc" "${BE_HOME}/dev_etc" \
+               "${BE_HOME}/birt_reports" "${BE_HOME}/profilers" "${BE_HOME}/templates" "${BE_HOME}/exports" \
+               "${BE_HOME}/WebContent" "${BE_HOME}/birt_platform" &&
+        mkdir -p "${BE_HOME}/pids" "${BE_HOME}/logs" &&
+        cp -r ./build/release/lib "${BE_HOME}" &&
+        cp -r ./bin "${BE_HOME}" &&
+        cp -r ./sbin "${BE_HOME}" &&
+        cp -r ./birt_platform.tar.gz "${BE_HOME}" &&
+        cp -r ./birt_reports "${BE_HOME}" &&
+        cp -r ./dev_etc "${BE_HOME}" &&
+        cp -r ./etc "${BE_HOME}" &&
+        cp -r ./profilers "${BE_HOME}" &&
+        cp -r ./templates "${BE_HOME}" &&
+        cp -r ./exports "${BE_HOME}" &&
+        cp -r ./WebContent "${BE_HOME}" &&
+        cp "${CONFIG_YML}" "${BE_HOME}/etc/" &&
+        cp ./etc/*.properties "${BE_HOME}/etc/" &&
+        cp ./src/main/resources/*.properties "${BE_HOME}/etc/" &&
+        cp ./etc/hibernate-dbhost.properties "${BE_HOME}/etc/hibernate.properties" &&
+        cp ./src/main/resources/*.xml "${BE_HOME}/etc/"
+    `, 120000);
+    logDeploy('Artifacts copied');
+
+    // Inject billing agents if needed
+    const jrunFile = `${BE_HOME}/etc/jrunagents.xml`;
+    if (!runCmd(`grep -l BillingManager "${jrunFile}" 2>/dev/null`)) {
+        logDeploy('Injecting billing agents...');
+        execSyncDeploy(`sed -i '/<\\/AGENTLIST>/i \\
+   <AGENT alias="BillingManager">\\
+      <TRAITLIST>\\
+         <TRAIT class="com.geowealth.agent.billing.BillingManagerTrait" />\\
+      </TRAITLIST>\\
+   </AGENT>\\
+\\
+   <AGENT alias="BillingProcessManager">\\
+      <TRAITLIST>\\
+         <TRAIT class="com.geowealth.agent.billing.BillingProcessManagerTrait" />\\
+      </TRAITLIST>\\
+   </AGENT>\\
+\\
+   <AGENT alias="BillingSpecificationManager">\\
+      <TRAITLIST>\\
+         <TRAIT class="com.geowealth.agent.billingspecification.BillingSpecificationManagerTrait" />\\
+      </TRAITLIST>\\
+   </AGENT>' "${jrunFile}"`, 10000);
+    }
+
+    // Extract birt platform & copy WebContent to Tomcat
+    execSyncDeploy(`cd "${BE_HOME}" && tar -xzf birt_platform.tar.gz`, 30000);
+    execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
+    logDeploy('WebContent deployed to Tomcat');
+
+    // 7. Start Tomcat
+    step('Starting Tomcat');
+    execSyncDeploy(`rm -f "${TOMCAT_HOME}/catalina_pid.txt" && ${TOMCAT_HOME}/bin/startup.sh`, 15000);
+    logDeploy('Tomcat started');
+
+    const finalBranch = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
+    step(`Deploy complete — branch: ${finalBranch}`);
+}
+
+function execSyncDeploy(cmd, timeout = 120000) {
+    try {
+        return execSync(cmd, { timeout, encoding: 'utf8', env: DEPLOY_ENV }).trim();
+    } catch (e) {
+        throw new Error(e.stderr || e.stdout || e.message);
+    }
+}
+
+function lastLines(str, n) {
+    if (!str) return '';
+    const lines = str.split('\n');
+    return lines.slice(-n).join('\n');
+}
+
+async function waitForTomcatStop() {
+    const pid = runCmd("pgrep -f catalina.startup.Bootstrap | head -1");
+    if (!pid) { logDeploy('Tomcat was not running'); return; }
+    logDeploy(`Waiting for Tomcat (PID ${pid}) to stop...`);
+    for (let i = 0; i < 30; i++) {
+        if (!runCmd(`kill -0 ${pid} 2>/dev/null && echo alive`)) {
+            logDeploy('Tomcat stopped');
+            return;
+        }
+        await new Promise(r => setTimeout(r, 1000));
+    }
+    logDeploy('Force killing Tomcat...');
+    runCmd(`kill -9 ${pid} 2>/dev/null`);
+    await new Promise(r => setTimeout(r, 1000));
+}
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server Status API listening on :${PORT}`);
 });

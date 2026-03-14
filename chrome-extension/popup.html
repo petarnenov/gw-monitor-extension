@@ -59,6 +59,25 @@
       </div>
     </section>
 
+    <section id="deploy-section">
+      <h2>Deploy</h2>
+      <div class="stat-card full-width">
+        <div class="deploy-row">
+          <div class="typeahead-wrap">
+            <input id="branch-input" type="text" placeholder="Search branch..." autocomplete="off" spellcheck="false">
+            <div id="branch-dropdown" class="branch-dropdown hidden"></div>
+          </div>
+          <button id="stash-btn" class="stash-btn hidden" title="Stash all changes (including untracked)">Stash</button>
+          <button id="deploy-btn" class="deploy-btn" title="Pull, build & deploy" disabled>Deploy</button>
+        </div>
+        <div id="deploy-current" class="deploy-current"></div>
+        <div id="deploy-dirty" class="deploy-dirty hidden"></div>
+        <div id="deploy-log-wrap" class="hidden">
+          <pre id="deploy-log"></pre>
+        </div>
+      </div>
+    </section>
+
     <section id="tomcat-section">
       <h2>Tomcat <button id="logs-tomcat-btn" class="log-btn" title="View Tomcat logs">&#x1F4C4; Logs</button> <button id="restart-tomcat-btn" class="restart-btn" title="Restart Tomcat">&#x21bb; Restart</button></h2>
       <div class="grid-2">

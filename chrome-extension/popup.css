@@ -368,6 +368,109 @@ section { margin-bottom: 12px; }
   word-break: break-word;
 }
 
+/* Deploy section */
+.deploy-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.typeahead-wrap {
+  flex: 1;
+  position: relative;
+}
+#branch-input {
+  width: 100%;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: monospace;
+  background: var(--bg-body);
+  color: var(--text-primary);
+  outline: none;
+}
+#branch-input:focus { border-color: var(--accent); }
+.branch-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0; right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  z-index: 50;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.branch-item {
+  padding: 5px 8px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-light);
+}
+.branch-item:hover, .branch-item.active { background: var(--bg-hover); }
+.branch-item:last-child { border-bottom: none; }
+.branch-name { font-size: 12px; color: var(--text-primary); }
+.branch-name strong { color: var(--accent); }
+.branch-meta { font-size: 10px; color: var(--text-muted); margin-left: 8px; white-space: nowrap; }
+.branch-empty { padding: 8px; font-size: 12px; color: var(--text-muted); text-align: center; }
+.stash-btn {
+  background: none;
+  border: 1px solid var(--bar-warn);
+  border-radius: 4px;
+  color: var(--bar-warn);
+  padding: 4px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.stash-btn:hover { background: var(--bar-warn); color: #fff; }
+.stash-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.deploy-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.deploy-btn:hover { background: var(--accent-hover); }
+.deploy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.deploy-current {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.deploy-dirty {
+  font-size: 12px;
+  color: var(--bar-warn);
+  margin-top: 2px;
+}
+#deploy-log-wrap {
+  margin-top: 8px;
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-body);
+}
+#deploy-log {
+  padding: 8px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  margin: 0;
+}
+
 /* Log buttons */
 .log-btn {
   background: none;
