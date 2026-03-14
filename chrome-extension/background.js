@@ -1,5 +1,8 @@
 const DEFAULT_URL = 'http://localhost:7103';
-const CHECK_INTERVAL_MINUTES = 2;
+
+// Track previous state to only notify on NEW problems
+let prevHealthy = true;
+let prevProblems = [];
 
 async function getApiUrl() {
     const { serverUrl } = await chrome.storage.local.get('serverUrl');
@@ -7,7 +10,7 @@ async function getApiUrl() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-    chrome.alarms.create('checkStatus', { periodInMinutes: CHECK_INTERVAL_MINUTES });
+    chrome.alarms.create('checkStatus', { periodInMinutes: 1 });
     checkStatus();
 });
 
@@ -35,6 +38,33 @@ async function checkStatus() {
 
         const allOk = agentsOk && tomcatOk && systemOk;
 
+        // Build list of current problems
+        const problems = [];
+        if (!tomcatOk) problems.push('Tomcat is down');
+        if (!systemOk) problems.push(`RAM at ${(memPct * 100).toFixed(0)}%`);
+        const downAgents = monitored.filter(a => !a.running || !a.accessible);
+        for (const a of downAgents) {
+            problems.push(`${a.name} is ${a.running ? 'not accessible' : 'stopped'}`);
+        }
+
+        // Notify only on transition from healthy to unhealthy, or new problems
+        if (!allOk && (prevHealthy || hasNewProblems(problems, prevProblems))) {
+            notify(problems);
+        }
+        // Notify recovery
+        if (allOk && !prevHealthy) {
+            chrome.notifications.create('gw-recovery', {
+                type: 'basic',
+                iconUrl: 'icons/icon-green-128.png',
+                title: 'GeoWealth Server — Recovered',
+                message: `All systems OK — ${monitoredHealthy}/${monitoredTotal} agents healthy`,
+                priority: 1,
+            });
+        }
+
+        prevHealthy = allOk;
+        prevProblems = problems;
+
         await chrome.storage.local.set({
             lastStatus: data,
             lastCheck: Date.now(),
@@ -44,6 +74,19 @@ async function checkStatus() {
 
         updateBadge(allOk, monitoredHealthy, monitoredTotal);
     } catch (e) {
+        // Notify server unreachable (only on transition)
+        if (prevHealthy) {
+            chrome.notifications.create('gw-unreachable', {
+                type: 'basic',
+                iconUrl: 'icons/icon-red-128.png',
+                title: 'GeoWealth Server — Unreachable',
+                message: 'Cannot reach status API: ' + e.message,
+                priority: 2,
+            });
+        }
+        prevHealthy = false;
+        prevProblems = ['Server unreachable'];
+
         await chrome.storage.local.set({
             lastCheck: Date.now(),
             healthy: false,
@@ -51,6 +94,22 @@ async function checkStatus() {
         });
         updateBadge(false, 0, 0, true);
     }
+}
+
+function hasNewProblems(current, previous) {
+    return current.some(p => !previous.includes(p));
+}
+
+function notify(problems) {
+    const count = problems.length;
+    const message = problems.slice(0, 4).join('\n') + (count > 4 ? `\n... and ${count - 4} more` : '');
+    chrome.notifications.create('gw-alert-' + Date.now(), {
+        type: 'basic',
+        iconUrl: 'icons/icon-red-128.png',
+        title: `GeoWealth Server — ${count} problem${count > 1 ? 's' : ''}`,
+        message,
+        priority: 2,
+    });
 }
 
 function updateBadge(allOk, healthy, total, unreachable = false) {

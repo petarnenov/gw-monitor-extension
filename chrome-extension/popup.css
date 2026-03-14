@@ -496,6 +496,19 @@ section { margin-bottom: 12px; }
 }
 .restart-btn-sm:hover { border-color: var(--bar-danger); color: var(--bar-danger); }
 .restart-btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+.stop-btn-sm {
+  background: none;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  padding: 1px 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.stop-btn-sm:hover { border-color: var(--bar-danger); color: var(--bar-danger); }
+.stop-btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+.action-btns { white-space: nowrap; display: flex; gap: 3px; }
 
 #agent-summary {
   font-size: 15px;

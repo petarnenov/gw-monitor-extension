@@ -442,6 +442,26 @@ app.post('/restart/tomcat', async (_req, res) => {
     }
 });
 
+// Stop a specific agent
+app.post('/stop/agent/:name', async (req, res) => {
+    const name = req.params.name;
+    if (!/^[a-z][a-z0-9]*$/.test(name)) {
+        return res.status(400).json({ ok: false, message: 'Invalid agent name' });
+    }
+    const pidFile = `${BE_HOME}/pids/${name}.pid`;
+    if (!fs.existsSync(pidFile)) {
+        return res.status(404).json({ ok: false, message: `Agent "${name}" not found or not running` });
+    }
+    try {
+        console.log(`[stop] Stopping agent ${name}...`);
+        await runAsync(`${SBIN}/nfstop ${name} 2>&1`, 60000);
+        res.json({ ok: true, message: `Agent "${name}" stopped` });
+    } catch (e) {
+        console.error(`[stop] Agent ${name} stop failed:`, e.message);
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
 // Restart a specific agent
 app.post('/restart/agent/:name', async (req, res) => {
     const name = req.params.name;

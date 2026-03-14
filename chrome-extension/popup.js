@@ -246,7 +246,10 @@ function render(data, lastCheck) {
             <td>${a.running && a.uptime_seconds ? formatUptime(a.uptime_seconds) : '-'}</td>
             <td>${statusHtml}</td>
             <td>${a.running ? `<button class="log-agent-btn log-btn-sm" data-agent="${escapeHtml(a.name)}" title="View logs">&#x1F4C4;</button>` : ''}</td>
-            <td><button class="restart-agent-btn restart-btn-sm" data-agent="${escapeHtml(a.name)}" title="${a.running ? 'Restart' : 'Start'} ${escapeHtml(a.name)}">&#x21bb;</button></td>
+            <td class="action-btns">
+              ${a.running ? `<button class="stop-agent-btn stop-btn-sm" data-agent="${escapeHtml(a.name)}" title="Stop ${escapeHtml(a.name)}">&#x25A0;</button>` : ''}
+              <button class="restart-agent-btn restart-btn-sm" data-agent="${escapeHtml(a.name)}" title="${a.running ? 'Restart' : 'Start'} ${escapeHtml(a.name)}">&#x21bb;</button>
+            </td>
         `;
         tbody.appendChild(tr);
     }
@@ -257,6 +260,9 @@ function render(data, lastCheck) {
     });
     document.querySelectorAll('.log-agent-btn').forEach(btn => {
         btn.addEventListener('click', () => openLogViewer('agent', btn.dataset.agent));
+    });
+    document.querySelectorAll('.stop-agent-btn').forEach(btn => {
+        btn.addEventListener('click', () => stopAgent(btn.dataset.agent, btn));
     });
     document.querySelectorAll('.edit-mem-btn').forEach(btn => {
         btn.addEventListener('click', () => editAgentMemory(btn.dataset.agent, btn.dataset.current));
@@ -433,6 +439,30 @@ async function restartTomcat() {
     setTimeout(() => {
         btn.disabled = false;
         btn.innerHTML = '&#x21bb; Restart';
+        refresh();
+    }, 3000);
+}
+
+async function stopAgent(name, btn) {
+    if (!confirm(`Stop agent "${name}"?`)) return;
+    btn.disabled = true;
+    btn.textContent = '\u23F3';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/stop/agent/${name}`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(120000),
+        });
+        const data = await res.json();
+        btn.textContent = data.ok ? '\u2713' : '\u2717';
+        if (!data.ok) showError(`Agent "${name}" stop failed: ` + data.message);
+    } catch (e) {
+        btn.textContent = '\u2717';
+        showError(`Agent "${name}" stop error: ` + e.message);
+    }
+    setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '&#x25A0;';
         refresh();
     }, 3000);
 }

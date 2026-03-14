@@ -3,7 +3,7 @@
   "name": "GeoWealth Server Monitor",
   "version": "1.0.0",
   "description": "Monitors GeoWealth dev server status — agents, Tomcat, system resources",
-  "permissions": ["alarms", "storage"],
+  "permissions": ["alarms", "storage", "notifications"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "action": {
     "default_icon": {
