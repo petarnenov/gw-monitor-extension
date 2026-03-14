@@ -92,7 +92,7 @@
 body {
   width: 100%;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 13px;
+  font-size: 17px;
   color: var(--text-primary);
   background: var(--bg-body);
 }
@@ -109,7 +109,7 @@ header {
 }
 
 header h1 {
-  font-size: 15px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--text-heading);
 }
@@ -121,7 +121,7 @@ header h1 {
 }
 
 #last-check {
-  font-size: 11px;
+  font-size: 15px;
   color: var(--text-muted);
 }
 
@@ -130,7 +130,7 @@ header h1 {
   border: 1px solid var(--border-input);
   border-radius: 4px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 18px;
   padding: 2px 6px;
   color: var(--text-secondary);
   transition: all 0.15s;
@@ -143,7 +143,7 @@ header h1 {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 h2 {
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -161,7 +161,7 @@ section { margin-bottom: 12px; }
   padding: 8px 10px;
   border-radius: 6px;
   margin-bottom: 12px;
-  font-size: 12px;
+  font-size: 16px;
 }
 .hidden { display: none !important; }
 
@@ -175,7 +175,7 @@ section { margin-bottom: 12px; }
 }
 #settings-panel label {
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -190,7 +190,7 @@ section { margin-bottom: 12px; }
   border: 1px solid var(--border-input);
   border-radius: 4px;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: 14px;
   font-family: monospace;
   outline: none;
   background: var(--bg-body);
@@ -203,13 +203,13 @@ section { margin-bottom: 12px; }
   border: none;
   border-radius: 4px;
   padding: 5px 12px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
 }
 #save-url-btn:hover { background: var(--accent-hover); }
 .settings-msg-ok {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--success-text);
   margin-top: 4px;
 }
@@ -229,13 +229,13 @@ section { margin-bottom: 12px; }
 .stat-card.full-width { grid-column: 1 / -1; }
 .stat-card label {
   display: block;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 600;
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 2px;
 }
-.stat-card span { font-weight: 600; font-size: 13px; }
+.stat-card span { font-weight: 600; font-size: 17px; }
 
 /* Progress bars */
 .bar-wrap {
@@ -263,7 +263,7 @@ section { margin-bottom: 12px; }
   border-radius: 6px;
   padding: 8px 10px;
 }
-.inline-stats span { font-size: 12px; }
+.inline-stats span { font-size: 14px; }
 
 /* Status dot */
 .dot {
@@ -287,7 +287,7 @@ section { margin-bottom: 12px; }
   overflow: hidden;
 }
 #agents-table th {
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 600;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -298,18 +298,18 @@ section { margin-bottom: 12px; }
 }
 #agents-table td {
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: 16px;
   border-bottom: 1px solid var(--border-light);
 }
 #agents-table tr:last-child td { border-bottom: none; }
 #agents-table tr:hover td { background: var(--bg-hover); }
 #agents-table .mem-cell { min-width: 100px; }
 #agents-table .mem-cell .bar-wrap { margin: 0 0 2px; }
-#agents-table .mem-label { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+#agents-table .mem-label { font-size: 14px; color: var(--text-muted); white-space: nowrap; }
 
 /* JVM config compact */
 #tomcat-jvm, #tomcat-webapps {
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 500;
   font-family: monospace;
   word-break: break-word;
@@ -321,7 +321,7 @@ section { margin-bottom: 12px; }
   border: 1px solid var(--accent);
   border-radius: 4px;
   color: var(--accent);
-  font-size: 10px;
+  font-size: 14px;
   padding: 1px 6px;
   cursor: pointer;
   margin-left: 4px;
@@ -334,7 +334,7 @@ section { margin-bottom: 12px; }
   border: 1px solid var(--border-input);
   border-radius: 3px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 14px;
   padding: 1px 4px;
   cursor: pointer;
   transition: all 0.15s;
@@ -371,7 +371,7 @@ section { margin-bottom: 12px; }
   background: var(--bg-card);
 }
 #log-modal-title {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-heading);
 }
@@ -381,7 +381,7 @@ section { margin-bottom: 12px; }
   gap: 6px;
 }
 #log-modal-actions select {
-  font-size: 11px;
+  font-size: 13px;
   padding: 2px 4px;
   border: 1px solid var(--border-input);
   border-radius: 3px;
@@ -392,7 +392,7 @@ section { margin-bottom: 12px; }
   background: none;
   border: 1px solid var(--border-input);
   border-radius: 3px;
-  font-size: 14px;
+  font-size: 16px;
   padding: 1px 6px;
   cursor: pointer;
   color: var(--text-secondary);
@@ -403,7 +403,7 @@ section { margin-bottom: 12px; }
   overflow: auto;
   padding: 8px 12px;
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 11px;
+  font-size: 15px;
   line-height: 1.5;
   color: var(--text-primary);
   white-space: pre;
@@ -416,7 +416,7 @@ section { margin-bottom: 12px; }
   border: 1px solid var(--bar-danger);
   border-radius: 4px;
   color: var(--bar-danger);
-  font-size: 10px;
+  font-size: 14px;
   padding: 1px 6px;
   cursor: pointer;
   margin-left: 8px;
@@ -430,7 +430,7 @@ section { margin-bottom: 12px; }
   border: 1px solid var(--border-input);
   border-radius: 3px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 14px;
   padding: 1px 4px;
   cursor: pointer;
   transition: all 0.15s;
@@ -439,7 +439,7 @@ section { margin-bottom: 12px; }
 .restart-btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
 
 #agent-summary {
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 400;
   color: var(--text-muted);
 }
