@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>GeoWealth Server</h1>
+      <div id="header-right">
+        <span id="last-check"></span>
+        <button id="settings-btn" title="Settings">&#x2699;</button>
+        <button id="refresh-btn" title="Refresh">&#x21bb;</button>
+      </div>
+    </header>
+
+    <!-- Settings panel -->
+    <div id="settings-panel" class="hidden">
+      <label for="server-url-input">Server URL</label>
+      <div class="settings-row">
+        <input id="server-url-input" type="text" placeholder="http://192.168.1.100:7103" spellcheck="false">
+        <button id="save-url-btn">Save</button>
+      </div>
+      <div id="settings-msg" class="hidden"></div>
+    </div>
+
+    <div id="error-banner" class="hidden">
+      <span id="error-msg"></span>
+    </div>
+
+    <section id="system-section">
+      <h2>System</h2>
+      <div class="grid-2">
+        <div class="stat-card">
+          <label>Uptime</label>
+          <span id="uptime"></span>
+        </div>
+        <div class="stat-card">
+          <label>Load</label>
+          <span id="load"></span>
+        </div>
+        <div class="stat-card">
+          <label>RAM</label>
+          <div class="bar-wrap"><div id="ram-bar" class="bar"></div></div>
+          <span id="ram-text"></span>
+        </div>
+        <div class="stat-card">
+          <label>Swap</label>
+          <div class="bar-wrap"><div id="swap-bar" class="bar"></div></div>
+          <span id="swap-text"></span>
+        </div>
+        <div class="stat-card full-width">
+          <label>Disk</label>
+          <div class="bar-wrap"><div id="disk-bar" class="bar"></div></div>
+          <span id="disk-text"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="tomcat-section">
+      <h2>Tomcat</h2>
+      <div class="inline-stats">
+        <span id="tomcat-status"></span>
+        <span id="tomcat-response"></span>
+        <span id="tomcat-mem"></span>
+      </div>
+    </section>
+
+    <section id="agents-section">
+      <h2>Agents <span id="agent-summary"></span></h2>
+      <table id="agents-table">
+        <thead>
+          <tr>
+            <th>Agent</th>
+            <th>Xmx</th>
+            <th>RSS</th>
+            <th>CPU</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="agents-tbody"></tbody>
+      </table>
+    </section>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
