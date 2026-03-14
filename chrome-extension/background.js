@@ -23,7 +23,12 @@ async function checkStatus() {
         const res = await fetch(`${baseUrl}/status`, { signal: AbortSignal.timeout(10000) });
         const data = await res.json();
 
-        const agentsOk = data.agents.healthy === data.agents.total;
+        // Only monitor agents that should be running (autostart or currently running)
+        const monitored = (data.agents.agents || []).filter(a => a.autostart || a.running);
+        const monitoredHealthy = monitored.filter(a => a.running && a.accessible).length;
+        const monitoredTotal = monitored.length;
+        const agentsOk = monitoredHealthy === monitoredTotal;
+
         const tomcatOk = data.tomcat.running;
         const memPct = data.system.memory.used / data.system.memory.total;
         const systemOk = memPct < 0.95;
@@ -37,7 +42,7 @@ async function checkStatus() {
             error: null,
         });
 
-        updateBadge(allOk, data.agents.healthy, data.agents.total);
+        updateBadge(allOk, monitoredHealthy, monitoredTotal);
     } catch (e) {
         await chrome.storage.local.set({
             lastCheck: Date.now(),
