@@ -602,7 +602,7 @@ async function checkDeployStatus() {
 
 // ── Log highlighting ──
 
-const LOG_ERROR_RE = /\b(error|exception|fatal|fail(ed|ure)?|crash|panic|severe|critical|stacktrace|caused\s+by|abort(ed)?)\b/i;
+const LOG_ERROR_RE = /\b(error|exception|fatal|fail(ed|ure)?|crash|panic|severe|critical|stacktrace|caused\s+by|abort(ed)?|warn(ing)?|timeout|no\s+route)\b/i;
 
 function highlightLogErrors(text) {
     return text.split('\n').map(line => {
