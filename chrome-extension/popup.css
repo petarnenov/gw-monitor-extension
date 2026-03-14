@@ -462,6 +462,12 @@ section { margin-bottom: 12px; }
   white-space: pre;
   margin: 0;
 }
+.log-error-line {
+  color: #ff7f7f;
+  background: rgba(255, 127, 127, 0.1);
+  display: inline-block;
+  width: 100%;
+}
 
 /* Restart buttons */
 .restart-btn {

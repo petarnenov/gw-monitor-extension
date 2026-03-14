@@ -308,6 +308,20 @@ function formatUptime(secs) {
     return parts.join(' ');
 }
 
+// ── Log highlighting ──
+
+const LOG_ERROR_RE = /\b(error|exception|fatal|fail(ed|ure)?|crash|panic|severe|critical|stacktrace|caused\s+by|abort(ed)?)\b/i;
+
+function highlightLogErrors(text) {
+    return text.split('\n').map(line => {
+        const safe = escapeHtml(line);
+        if (LOG_ERROR_RE.test(line)) {
+            return `<span class="log-error-line">${safe}</span>`;
+        }
+        return safe;
+    }).join('\n');
+}
+
 // ── Log viewer ──
 
 let currentLogType = null;
@@ -342,7 +356,8 @@ async function fetchLogs() {
         : `${baseUrl}/logs/agent/${currentLogName}?lines=${lines}`;
     try {
         const res = await fetch(path, { signal: AbortSignal.timeout(15000) });
-        body.textContent = await res.text();
+        const text = await res.text();
+        body.innerHTML = highlightLogErrors(text);
         body.scrollTop = body.scrollHeight;
     } catch (e) {
         body.textContent = 'Error fetching logs: ' + e.message;
