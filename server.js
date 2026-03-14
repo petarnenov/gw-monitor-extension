@@ -420,17 +420,40 @@ function runAsync(cmd, timeout = 120000) {
     });
 }
 
+// Stop Tomcat
+app.post('/stop/tomcat', async (_req, res) => {
+    try {
+        console.log('[stop] Stopping Tomcat...');
+        await runAsync(`${TOMCAT_BIN}/shutdown.sh 2>&1`, 30000).catch(() => {});
+        await runAsync('sleep 5');
+        const pids = runCmd("pgrep -f catalina.startup.Bootstrap");
+        if (pids) {
+            for (const pid of pids.split('\n').filter(Boolean)) {
+                console.log(`[stop] Force killing Tomcat pid ${pid}`);
+                await runAsync(`kill -9 ${pid} 2>/dev/null`).catch(() => {});
+            }
+            await runAsync('sleep 2');
+        }
+        res.json({ ok: true, message: 'Tomcat stopped' });
+    } catch (e) {
+        console.error('[stop] Tomcat stop failed:', e.message);
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
 // Restart Tomcat
 app.post('/restart/tomcat', async (_req, res) => {
     try {
         console.log('[restart] Stopping Tomcat...');
         await runAsync(`${TOMCAT_BIN}/shutdown.sh 2>&1`, 30000).catch(() => {});
-        // Wait for graceful stop, then force if needed
+        // Wait for graceful stop, then force kill ALL Tomcat processes
         await runAsync('sleep 5');
-        const pid = runCmd("pgrep -f catalina.startup.Bootstrap");
-        if (pid) {
-            console.log(`[restart] Force killing Tomcat pid ${pid}`);
-            await runAsync(`kill -9 ${pid} 2>/dev/null`).catch(() => {});
+        const pids = runCmd("pgrep -f catalina.startup.Bootstrap");
+        if (pids) {
+            for (const pid of pids.split('\n').filter(Boolean)) {
+                console.log(`[restart] Force killing Tomcat pid ${pid}`);
+                await runAsync(`kill -9 ${pid} 2>/dev/null`).catch(() => {});
+            }
             await runAsync('sleep 2');
         }
         console.log('[restart] Starting Tomcat...');
@@ -994,19 +1017,27 @@ function lastLines(str, n) {
 }
 
 async function waitForTomcatStop() {
-    const pid = runCmd("pgrep -f catalina.startup.Bootstrap | head -1");
-    if (!pid) { logDeploy('Tomcat was not running'); return; }
-    logDeploy(`Waiting for Tomcat (PID ${pid}) to stop...`);
+    const pids = runCmd("pgrep -f catalina.startup.Bootstrap");
+    if (!pids) { logDeploy('Tomcat was not running'); return; }
+    const pidList = pids.split('\n').filter(Boolean);
+    logDeploy(`Waiting for Tomcat to stop (${pidList.length} process(es): ${pidList.join(', ')})...`);
     for (let i = 0; i < 30; i++) {
-        if (!runCmd(`kill -0 ${pid} 2>/dev/null && echo alive`)) {
+        const alive = runCmd("pgrep -f catalina.startup.Bootstrap");
+        if (!alive) {
             logDeploy('Tomcat stopped');
             return;
         }
         await new Promise(r => setTimeout(r, 1000));
     }
-    logDeploy('Force killing Tomcat...');
-    runCmd(`kill -9 ${pid} 2>/dev/null`);
-    await new Promise(r => setTimeout(r, 1000));
+    // Force kill ALL remaining Tomcat processes
+    const remaining = runCmd("pgrep -f catalina.startup.Bootstrap");
+    if (remaining) {
+        for (const pid of remaining.split('\n').filter(Boolean)) {
+            logDeploy(`Force killing Tomcat PID ${pid}...`);
+            runCmd(`kill -9 ${pid} 2>/dev/null`);
+        }
+        await new Promise(r => setTimeout(r, 1000));
+    }
 }
 
 app.listen(PORT, '0.0.0.0', () => {

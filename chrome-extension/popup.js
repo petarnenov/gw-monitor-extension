@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('settings-btn').addEventListener('click', toggleSettings);
     document.getElementById('save-url-btn').addEventListener('click', saveUrl);
     document.getElementById('theme-btn').addEventListener('click', toggleTheme);
+    document.getElementById('stop-tomcat-btn').addEventListener('click', stopTomcat);
     document.getElementById('restart-tomcat-btn').addEventListener('click', restartTomcat);
     document.getElementById('restart-all-agents-btn').addEventListener('click', restartAllAgents);
     document.getElementById('logs-tomcat-btn').addEventListener('click', () => openLogViewer('tomcat'));
@@ -708,6 +709,31 @@ async function toggleAutostart(name, enabled, cb) {
 }
 
 // ── Restart functions ──
+
+async function stopTomcat() {
+    if (!confirm('Stop Tomcat? This will kill all Tomcat processes.')) return;
+    const btn = document.getElementById('stop-tomcat-btn');
+    btn.disabled = true;
+    btn.textContent = '\u23F3 Stopping...';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/stop/tomcat`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(120000),
+        });
+        const data = await res.json();
+        btn.textContent = data.ok ? '\u2713 Stopped' : '\u2717 Failed';
+        if (!data.ok) showError('Tomcat stop failed: ' + data.message);
+    } catch (e) {
+        btn.textContent = '\u2717 Error';
+        showError('Tomcat stop error: ' + e.message);
+    }
+    setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '&#x25A0; Stop';
+        refresh();
+    }, 3000);
+}
 
 async function restartTomcat() {
     if (!confirm('Are you sure you want to restart Tomcat?')) return;
