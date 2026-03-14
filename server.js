@@ -12,11 +12,15 @@ const express = require('express');
 const { execSync, exec } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const yaml = require('js-yaml');
 
 const PORT = parseInt(process.argv.includes('--port')
     ? process.argv[process.argv.indexOf('--port') + 1] : '7103', 10);
 const BE_HOME = '/home/petar/AppServer/BEServer';
 const TOMCAT_PORT = 8080;
+const CONFIG_YML = process.env.GEO_TEMPLATE_NAME || '/home/petar/AppServer/petarServer.yml';
+const GEO_ENV = process.env.GEO_ENV || 'DevPetar';
+const GEO_SERVER = process.env.GEO_SERVER || 'DevPetar';
 
 function runCmd(cmd, timeout = 10000) {
     try {
@@ -179,66 +183,195 @@ function getRequestsToday() {
     return parseInt(count, 10) || 0;
 }
 
+function getConfiguredAgents() {
+    try {
+        const raw = fs.readFileSync(CONFIG_YML, 'utf8');
+        const doc = yaml.load(raw);
+        const env = doc.environments[GEO_ENV];
+        if (!env) return [];
+        const server = env.servers[GEO_SERVER];
+        if (!server || !server.agents) return [];
+        return server.agents.map(a => ({
+            name: a.name,
+            configured_memory: a.max_memory,
+            autostart: a.autostart !== 'no_autostart',
+            jvm_params: a.jvm_params || null,
+            restart_if_dead: a.restart_if_dead === 'yes' || a.restart_if_dead === true,
+        }));
+    } catch {
+        return [];
+    }
+}
+
+function updateAgentMemory(agentName, newMemory) {
+    const raw = fs.readFileSync(CONFIG_YML, 'utf8');
+    // Find the agent's max_memory line and update it
+    const lines = raw.split('\n');
+    let inAgent = false;
+    for (let i = 0; i < lines.length; i++) {
+        const nameMatch = lines[i].match(/^\s+-\s+name:\s+(\S+)/);
+        if (nameMatch) {
+            inAgent = nameMatch[1] === agentName;
+        }
+        if (inAgent && lines[i].match(/^\s+max_memory:\s+/)) {
+            const indent = lines[i].match(/^(\s+)/)[1];
+            lines[i] = `${indent}max_memory: ${newMemory}`;
+            fs.writeFileSync(CONFIG_YML, lines.join('\n'), 'utf8');
+            return true;
+        }
+    }
+    return false;
+}
+
+function updateAgentAutostart(agentName, enabled) {
+    const raw = fs.readFileSync(CONFIG_YML, 'utf8');
+    const lines = raw.split('\n');
+    let inAgent = false;
+    let agentStartIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+        const nameMatch = lines[i].match(/^\s+-\s+name:\s+(\S+)/);
+        if (nameMatch) {
+            inAgent = nameMatch[1] === agentName;
+            if (inAgent) agentStartIdx = i;
+        }
+        if (inAgent && lines[i].match(/^\s+autostart:\s+/)) {
+            if (enabled) {
+                // Remove the autostart: no_autostart line
+                lines.splice(i, 1);
+            } else {
+                const indent = lines[i].match(/^(\s+)/)[1];
+                lines[i] = `${indent}autostart: no_autostart`;
+            }
+            fs.writeFileSync(CONFIG_YML, lines.join('\n'), 'utf8');
+            return true;
+        }
+        // Hit next agent without finding autostart line
+        if (!inAgent && agentStartIdx >= 0 && nameMatch) {
+            if (!enabled) {
+                // Need to add autostart: no_autostart after the previous agent's last property
+                const prevIndent = lines[agentStartIdx].match(/^(\s+-\s+)/)[0].replace('-', ' ');
+                lines.splice(i, 0, `${prevIndent}autostart: no_autostart`);
+                fs.writeFileSync(CONFIG_YML, lines.join('\n'), 'utf8');
+                return true;
+            }
+            // Autostart is already enabled (no line present means auto)
+            return true;
+        }
+    }
+    // Last agent in file, no autostart line found
+    if (inAgent && !enabled) {
+        const indent = lines[agentStartIdx].match(/^(\s+-\s+)/)[0].replace('-', ' ');
+        lines.push(`${indent}autostart: no_autostart`);
+        fs.writeFileSync(CONFIG_YML, lines.join('\n'), 'utf8');
+        return true;
+    }
+    if (inAgent && enabled) return true; // already autostart
+    return false;
+}
+
 function getAgents() {
     const nfjobsRaw = runCmd(`${BE_HOME}/sbin/nfjobs 2>/dev/null`);
     const nfcheckRaw = runCmd(`${BE_HOME}/sbin/nfcheckall 2>/dev/null`);
 
-    const agents = [];
+    // Get all configured agents from YAML
+    const configured = getConfiguredAgents();
+
+    // Build running agents map
+    const runningMap = {};
     for (const line of nfjobsRaw.split('\n')) {
         const m = line.match(/Name:\s+(\S+)\s+PID:\s+(\d+)\s+Start Time:\s+(.*)/);
         if (m) {
-            agents.push({
-                name: m[1], pid: +m[2], started: m[3].trim(), accessible: false,
-            });
+            runningMap[m[1]] = { pid: +m[2], started: m[3].trim() };
         }
     }
 
+    // Build accessible set
+    const accessibleSet = new Set();
     for (const line of nfcheckRaw.split('\n')) {
         const m = line.match(/Agentsystem\s+(\S+)\s+exists and is accessible/);
-        if (m) {
-            const agent = agents.find(a => a.name === m[1]);
-            if (agent) agent.accessible = true;
+        if (m) accessibleSet.add(m[1]);
+    }
+
+    // Merge: start with configured agents, add any running agents not in config
+    const agents = [];
+    const seen = new Set();
+
+    for (const cfg of configured) {
+        seen.add(cfg.name);
+        const running = runningMap[cfg.name];
+        const a = {
+            name: cfg.name,
+            configured_memory: cfg.configured_memory,
+            autostart: cfg.autostart,
+            restart_if_dead: cfg.restart_if_dead,
+            jvm_params: cfg.jvm_params,
+            running: !!running,
+            accessible: accessibleSet.has(cfg.name),
+            pid: running ? running.pid : null,
+            started: running ? running.started : null,
+        };
+        if (running) {
+            enrichRunningAgent(a);
+        }
+        agents.push(a);
+    }
+
+    // Add any running agents not in config
+    for (const [name, info] of Object.entries(runningMap)) {
+        if (!seen.has(name)) {
+            const a = {
+                name,
+                configured_memory: null,
+                autostart: null,
+                restart_if_dead: null,
+                jvm_params: null,
+                running: true,
+                accessible: accessibleSet.has(name),
+                pid: info.pid,
+                started: info.started,
+            };
+            enrichRunningAgent(a);
+            agents.push(a);
         }
     }
 
-    for (const a of agents) {
-        const psLine = runCmd(`ps -p ${a.pid} -o rss=,pcpu= 2>/dev/null`);
-        if (psLine) {
-            const parts = psLine.split(/\s+/).filter(Boolean);
-            if (parts.length >= 2) {
-                a.rss_kb = +parts[0];
-                a.cpu_pct = parseFloat(parts[1]);
-            }
-        }
-        try {
-            const cmdline = fs.readFileSync(`/proc/${a.pid}/cmdline`, 'utf8')
-                .replace(/\0/g, ' ');
-            const xmx = cmdline.match(/-Xmx(\S+)/);
-            if (xmx) a.xmx = xmx[1];
-        } catch { /* process gone */ }
-
-        // Uptime — parse "Thu Mar 12 07:02:13 PM EET 2026" format
-        if (a.started) {
-            try {
-                // Remove timezone abbreviation (EET, EEST, etc.) that Node can't parse
-                const cleanDate = a.started.replace(/\s(?:EET|EEST|CET|CEST|UTC|GMT|MSK|IST|EST|CST|PST|EDT|CDT|PDT|WET|WEST)\b/g, '');
-                const parsed = new Date(cleanDate);
-                if (!isNaN(parsed.getTime())) {
-                    a.uptime_seconds = Math.floor((Date.now() - parsed.getTime()) / 1000);
-                }
-            } catch { /* ignore */ }
-        }
-
-        // Threads & FDs
-        const threadCount = runCmd(`cat /proc/${a.pid}/status 2>/dev/null | grep Threads | awk '{print $2}'`);
-        const openFds = runCmd(`ls /proc/${a.pid}/fd 2>/dev/null | wc -l`);
-        if (threadCount) a.threads = parseInt(threadCount, 10) || 0;
-        if (openFds) a.open_fds = parseInt(openFds, 10) || 0;
-    }
-
-    const total = agents.length;
+    const total = configured.length;
+    const running = agents.filter(a => a.running).length;
     const healthy = agents.filter(a => a.accessible).length;
-    return { agents, total, healthy };
+    return { agents, total, running, healthy };
+}
+
+function enrichRunningAgent(a) {
+    if (!a.pid) return;
+    const psLine = runCmd(`ps -p ${a.pid} -o rss=,pcpu= 2>/dev/null`);
+    if (psLine) {
+        const parts = psLine.split(/\s+/).filter(Boolean);
+        if (parts.length >= 2) {
+            a.rss_kb = +parts[0];
+            a.cpu_pct = parseFloat(parts[1]);
+        }
+    }
+    try {
+        const cmdline = fs.readFileSync(`/proc/${a.pid}/cmdline`, 'utf8')
+            .replace(/\0/g, ' ');
+        const xmx = cmdline.match(/-Xmx(\S+)/);
+        if (xmx) a.xmx = xmx[1];
+    } catch { /* process gone */ }
+
+    if (a.started) {
+        try {
+            const cleanDate = a.started.replace(/\s(?:EET|EEST|CET|CEST|UTC|GMT|MSK|IST|EST|CST|PST|EDT|CDT|PDT|WET|WEST)\b/g, '');
+            const parsed = new Date(cleanDate);
+            if (!isNaN(parsed.getTime())) {
+                a.uptime_seconds = Math.floor((Date.now() - parsed.getTime()) / 1000);
+            }
+        } catch { /* ignore */ }
+    }
+
+    const threadCount = runCmd(`cat /proc/${a.pid}/status 2>/dev/null | grep Threads | awk '{print $2}'`);
+    const openFds = runCmd(`ls /proc/${a.pid}/fd 2>/dev/null | wc -l`);
+    if (threadCount) a.threads = parseInt(threadCount, 10) || 0;
+    if (openFds) a.open_fds = parseInt(openFds, 10) || 0;
 }
 
 async function collectStatus() {
@@ -255,7 +388,7 @@ const app = express();
 app.use((_req, res, next) => {
     res.set({
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
     });
     next();
@@ -345,6 +478,26 @@ app.post('/restart/agents', async (_req, res) => {
     }
 });
 
+app.put('/config/agent/:name/autostart', (req, res) => {
+    const name = req.params.name;
+    if (!/^[a-z][a-z0-9]*$/.test(name)) {
+        return res.status(400).json({ ok: false, message: 'Invalid agent name' });
+    }
+    const enabled = !!req.body.enabled;
+    try {
+        const updated = updateAgentAutostart(name, enabled);
+        if (updated) {
+            console.log(`[config] Updated ${name} autostart to ${enabled}`);
+            res.json({ ok: true, message: `${name} autostart ${enabled ? 'enabled' : 'disabled'}` });
+        } else {
+            res.status(404).json({ ok: false, message: `Agent "${name}" not found in config` });
+        }
+    } catch (e) {
+        console.error(`[config] Failed to update ${name} autostart:`, e.message);
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
 // ── Log endpoints ──
 
 const TOMCAT_LOGS = `${TOMCAT_HOME}/logs`;
@@ -378,6 +531,31 @@ app.get('/logs/agent/:name', (req, res) => {
         res.type('text/plain').send(output || '(empty)');
     } catch {
         res.status(500).type('text/plain').send('Error reading log');
+    }
+});
+
+// ── Agent config endpoints ──
+
+app.put('/config/agent/:name/memory', (req, res) => {
+    const name = req.params.name;
+    if (!/^[a-z][a-z0-9]*$/.test(name)) {
+        return res.status(400).json({ ok: false, message: 'Invalid agent name' });
+    }
+    const memory = parseInt(req.body.memory, 10);
+    if (!memory || memory < 1 || memory > 64) {
+        return res.status(400).json({ ok: false, message: 'Memory must be between 1 and 64 GB' });
+    }
+    try {
+        const updated = updateAgentMemory(name, memory);
+        if (updated) {
+            console.log(`[config] Updated ${name} max_memory to ${memory}g`);
+            res.json({ ok: true, message: `${name} memory set to ${memory}g (restart needed)` });
+        } else {
+            res.status(404).json({ ok: false, message: `Agent "${name}" not found in config` });
+        }
+    } catch (e) {
+        console.error(`[config] Failed to update ${name} memory:`, e.message);
+        res.status(500).json({ ok: false, message: e.message });
     }
 });
 
