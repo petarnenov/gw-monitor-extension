@@ -12,6 +12,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('theme-btn').addEventListener('click', toggleTheme);
     document.getElementById('restart-tomcat-btn').addEventListener('click', restartTomcat);
     document.getElementById('restart-all-agents-btn').addEventListener('click', restartAllAgents);
+    document.getElementById('logs-tomcat-btn').addEventListener('click', () => openLogViewer('tomcat'));
+    document.getElementById('log-close-btn').addEventListener('click', closeLogViewer);
+    document.getElementById('log-modal-backdrop').addEventListener('click', closeLogViewer);
+    document.getElementById('log-refresh-btn').addEventListener('click', refreshLogViewer);
+    document.getElementById('log-lines-select').addEventListener('change', refreshLogViewer);
 
     // Apply saved theme
     await applyTheme();
@@ -215,14 +220,18 @@ function render(data, lastCheck) {
             <td>${a.open_fds || '-'}</td>
             <td>${a.uptime_seconds ? formatUptime(a.uptime_seconds) : '-'}</td>
             <td><span class="dot ${a.accessible ? 'green' : 'red'}"></span>${a.accessible ? 'OK' : 'DOWN'}</td>
+            <td><button class="log-agent-btn log-btn-sm" data-agent="${escapeHtml(a.name)}" title="View logs">&#x1F4C4;</button></td>
             <td><button class="restart-agent-btn restart-btn-sm" data-agent="${escapeHtml(a.name)}" title="Restart ${escapeHtml(a.name)}">&#x21bb;</button></td>
         `;
         tbody.appendChild(tr);
     }
 
-    // Bind agent restart buttons
+    // Bind agent buttons
     document.querySelectorAll('.restart-agent-btn').forEach(btn => {
         btn.addEventListener('click', () => restartAgent(btn.dataset.agent, btn));
+    });
+    document.querySelectorAll('.log-agent-btn').forEach(btn => {
+        btn.addEventListener('click', () => openLogViewer('agent', btn.dataset.agent));
     });
 }
 
@@ -266,6 +275,47 @@ function formatUptime(secs) {
     if (h > 0) parts.push(`${h}h`);
     parts.push(`${m}m`);
     return parts.join(' ');
+}
+
+// ── Log viewer ──
+
+let currentLogType = null;
+let currentLogName = null;
+
+async function openLogViewer(type, name) {
+    currentLogType = type;
+    currentLogName = name;
+    const title = type === 'tomcat' ? 'Tomcat — catalina.out' : `Agent — ${name}/stdout.log`;
+    document.getElementById('log-modal-title').textContent = title;
+    document.getElementById('log-modal').classList.remove('hidden');
+    await fetchLogs();
+}
+
+function closeLogViewer() {
+    document.getElementById('log-modal').classList.add('hidden');
+    currentLogType = null;
+    currentLogName = null;
+}
+
+async function refreshLogViewer() {
+    if (currentLogType) await fetchLogs();
+}
+
+async function fetchLogs() {
+    const body = document.getElementById('log-modal-body');
+    body.textContent = 'Loading...';
+    const baseUrl = await getApiUrl();
+    const lines = document.getElementById('log-lines-select').value;
+    const path = currentLogType === 'tomcat'
+        ? `${baseUrl}/logs/tomcat?lines=${lines}`
+        : `${baseUrl}/logs/agent/${currentLogName}?lines=${lines}`;
+    try {
+        const res = await fetch(path, { signal: AbortSignal.timeout(15000) });
+        body.textContent = await res.text();
+        body.scrollTop = body.scrollHeight;
+    } catch (e) {
+        body.textContent = 'Error fetching logs: ' + e.message;
+    }
 }
 
 // ── Restart functions ──

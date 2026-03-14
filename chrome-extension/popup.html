@@ -60,7 +60,7 @@
     </section>
 
     <section id="tomcat-section">
-      <h2>Tomcat <button id="restart-tomcat-btn" class="restart-btn" title="Restart Tomcat">&#x21bb; Restart</button></h2>
+      <h2>Tomcat <button id="logs-tomcat-btn" class="log-btn" title="View Tomcat logs">&#x1F4C4; Logs</button> <button id="restart-tomcat-btn" class="restart-btn" title="Restart Tomcat">&#x21bb; Restart</button></h2>
       <div class="grid-2">
         <div class="stat-card">
           <label>Status</label>
@@ -119,12 +119,35 @@
             <th>Uptime</th>
             <th>Status</th>
             <th></th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="agents-tbody"></tbody>
       </table>
     </section>
   </div>
+
+  <!-- Log viewer modal -->
+  <div id="log-modal" class="hidden">
+    <div id="log-modal-backdrop"></div>
+    <div id="log-modal-content">
+      <div id="log-modal-header">
+        <span id="log-modal-title">Logs</span>
+        <div id="log-modal-actions">
+          <select id="log-lines-select" title="Lines to show">
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="500">500</option>
+            <option value="1000">1000</option>
+          </select>
+          <button id="log-refresh-btn" title="Refresh logs">&#x21bb;</button>
+          <button id="log-close-btn" title="Close">&times;</button>
+        </div>
+      </div>
+      <pre id="log-modal-body"></pre>
+    </div>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

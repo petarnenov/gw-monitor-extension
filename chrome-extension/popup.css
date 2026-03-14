@@ -315,6 +315,101 @@ section { margin-bottom: 12px; }
   word-break: break-word;
 }
 
+/* Log buttons */
+.log-btn {
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  margin-left: 4px;
+  transition: all 0.15s;
+  vertical-align: middle;
+}
+.log-btn:hover { background: var(--accent); color: #fff; }
+.log-btn-sm {
+  background: none;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 1px 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.log-btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Log modal */
+#log-modal {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 100;
+}
+#log-modal-backdrop {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+}
+#log-modal-content {
+  position: absolute;
+  top: 8px; left: 8px; right: 8px; bottom: 8px;
+  background: var(--bg-body);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#log-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+#log-modal-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-heading);
+}
+#log-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#log-modal-actions select {
+  font-size: 11px;
+  padding: 2px 4px;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  background: var(--bg-body);
+  color: var(--text-primary);
+}
+#log-modal-actions button {
+  background: none;
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  font-size: 14px;
+  padding: 1px 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+#log-modal-actions button:hover { background: var(--bg-btn-hover); color: var(--text-heading); }
+#log-modal-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre;
+  margin: 0;
+}
+
 /* Restart buttons */
 .restart-btn {
   background: none;

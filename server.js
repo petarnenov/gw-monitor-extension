@@ -345,6 +345,42 @@ app.post('/restart/agents', async (_req, res) => {
     }
 });
 
+// ── Log endpoints ──
+
+const TOMCAT_LOGS = `${TOMCAT_HOME}/logs`;
+const AGENT_LOGS = `${BE_HOME}/logs`;
+
+app.get('/logs/tomcat', (req, res) => {
+    const lines = parseInt(req.query.lines, 10) || 200;
+    const capped = Math.min(lines, 2000);
+    const logFile = `${TOMCAT_LOGS}/catalina.out`;
+    try {
+        const output = runCmd(`tail -n ${capped} "${logFile}" 2>/dev/null`, 15000);
+        res.type('text/plain').send(output || '(empty)');
+    } catch {
+        res.status(404).type('text/plain').send('Log file not found');
+    }
+});
+
+app.get('/logs/agent/:name', (req, res) => {
+    const name = req.params.name;
+    if (!/^[a-z][a-z0-9]*$/.test(name)) {
+        return res.status(400).type('text/plain').send('Invalid agent name');
+    }
+    const lines = parseInt(req.query.lines, 10) || 200;
+    const capped = Math.min(lines, 2000);
+    const logFile = `${AGENT_LOGS}/${name}/stdout.log`;
+    if (!fs.existsSync(logFile)) {
+        return res.status(404).type('text/plain').send(`Log not found: ${name}/stdout.log`);
+    }
+    try {
+        const output = runCmd(`tail -n ${capped} "${logFile}" 2>/dev/null`, 15000);
+        res.type('text/plain').send(output || '(empty)');
+    } catch {
+        res.status(500).type('text/plain').send('Error reading log');
+    }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server Status API listening on :${PORT}`);
 });
