@@ -10,6 +10,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('settings-btn').addEventListener('click', toggleSettings);
     document.getElementById('save-url-btn').addEventListener('click', saveUrl);
     document.getElementById('theme-btn').addEventListener('click', toggleTheme);
+    document.getElementById('restart-tomcat-btn').addEventListener('click', restartTomcat);
+    document.getElementById('restart-all-agents-btn').addEventListener('click', restartAllAgents);
 
     // Apply saved theme
     await applyTheme();
@@ -213,9 +215,15 @@ function render(data, lastCheck) {
             <td>${a.open_fds || '-'}</td>
             <td>${a.uptime_seconds ? formatUptime(a.uptime_seconds) : '-'}</td>
             <td><span class="dot ${a.accessible ? 'green' : 'red'}"></span>${a.accessible ? 'OK' : 'DOWN'}</td>
+            <td><button class="restart-agent-btn restart-btn-sm" data-agent="${escapeHtml(a.name)}" title="Restart ${escapeHtml(a.name)}">&#x21bb;</button></td>
         `;
         tbody.appendChild(tr);
     }
+
+    // Bind agent restart buttons
+    document.querySelectorAll('.restart-agent-btn').forEach(btn => {
+        btn.addEventListener('click', () => restartAgent(btn.dataset.agent, btn));
+    });
 }
 
 function escapeHtml(str) {
@@ -258,6 +266,82 @@ function formatUptime(secs) {
     if (h > 0) parts.push(`${h}h`);
     parts.push(`${m}m`);
     return parts.join(' ');
+}
+
+// ── Restart functions ──
+
+async function restartTomcat() {
+    if (!confirm('Are you sure you want to restart Tomcat?')) return;
+    const btn = document.getElementById('restart-tomcat-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Restarting...';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/restart/tomcat`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(120000),
+        });
+        const data = await res.json();
+        btn.textContent = data.ok ? '✓ Done' : '✗ Failed';
+        if (!data.ok) showError('Tomcat restart failed: ' + data.message);
+    } catch (e) {
+        btn.textContent = '✗ Error';
+        showError('Tomcat restart error: ' + e.message);
+    }
+    setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '&#x21bb; Restart';
+        refresh();
+    }, 3000);
+}
+
+async function restartAgent(name, btn) {
+    if (!confirm(`Restart agent "${name}"?`)) return;
+    btn.disabled = true;
+    btn.textContent = '⏳';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/restart/agent/${name}`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(120000),
+        });
+        const data = await res.json();
+        btn.textContent = data.ok ? '✓' : '✗';
+        if (!data.ok) showError(`Agent "${name}" restart failed: ` + data.message);
+    } catch (e) {
+        btn.textContent = '✗';
+        showError(`Agent "${name}" restart error: ` + e.message);
+    }
+    setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '&#x21bb;';
+        refresh();
+    }, 3000);
+}
+
+async function restartAllAgents() {
+    if (!confirm('Restart ALL agents? This may take several minutes.')) return;
+    const btn = document.getElementById('restart-all-agents-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Restarting...';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/restart/agents`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(300000),
+        });
+        const data = await res.json();
+        btn.textContent = data.ok ? '✓ Done' : '✗ Failed';
+        if (!data.ok) showError('Agents restart failed: ' + data.message);
+    } catch (e) {
+        btn.textContent = '✗ Error';
+        showError('Agents restart error: ' + e.message);
+    }
+    setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '&#x21bb; Restart All';
+        refresh();
+    }, 5000);
 }
 
 function showError(msg) {

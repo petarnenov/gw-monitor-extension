@@ -9,7 +9,7 @@
  */
 
 const express = require('express');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 
@@ -255,11 +255,13 @@ const app = express();
 app.use((_req, res, next) => {
     res.set({
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
     });
     next();
 });
+
+app.use(express.json());
 
 app.get('/status', async (_req, res) => {
     const data = await collectStatus();
@@ -268,6 +270,79 @@ app.get('/status', async (_req, res) => {
 
 app.get('/ping', (_req, res) => {
     res.type('text/plain').send('pong');
+});
+
+// ── Restart endpoints ──
+
+const TOMCAT_BIN = `${TOMCAT_HOME}/bin`;
+const SBIN = `${BE_HOME}/sbin`;
+const ENV_VARS = `GEO_TEMPLATE_NAME="${process.env.GEO_TEMPLATE_NAME || '/home/petar/AppServer/petarServer.yml'}" GEO_ENV="${process.env.GEO_ENV || 'DevPetar'}" GEO_SERVER="${process.env.GEO_SERVER || 'DevPetar'}"`;
+
+function runAsync(cmd, timeout = 120000) {
+    return new Promise((resolve, reject) => {
+        exec(cmd, { timeout, env: { ...process.env } }, (err, stdout, stderr) => {
+            if (err) reject(new Error(stderr || err.message));
+            else resolve(stdout.trim());
+        });
+    });
+}
+
+// Restart Tomcat
+app.post('/restart/tomcat', async (_req, res) => {
+    try {
+        console.log('[restart] Stopping Tomcat...');
+        await runAsync(`${TOMCAT_BIN}/shutdown.sh 2>&1`, 30000).catch(() => {});
+        // Wait for graceful stop, then force if needed
+        await runAsync('sleep 5');
+        const pid = runCmd("pgrep -f catalina.startup.Bootstrap");
+        if (pid) {
+            console.log(`[restart] Force killing Tomcat pid ${pid}`);
+            await runAsync(`kill -9 ${pid} 2>/dev/null`).catch(() => {});
+            await runAsync('sleep 2');
+        }
+        console.log('[restart] Starting Tomcat...');
+        await runAsync(`${TOMCAT_BIN}/startup.sh 2>&1`);
+        res.json({ ok: true, message: 'Tomcat restarted' });
+    } catch (e) {
+        console.error('[restart] Tomcat restart failed:', e.message);
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
+// Restart a specific agent
+app.post('/restart/agent/:name', async (req, res) => {
+    const name = req.params.name;
+    // Validate agent name — only alphanumeric and lowercase
+    if (!/^[a-z][a-z0-9]*$/.test(name)) {
+        return res.status(400).json({ ok: false, message: 'Invalid agent name' });
+    }
+    // Check agent exists
+    const pidFile = `${BE_HOME}/pids/${name}.pid`;
+    if (!fs.existsSync(pidFile)) {
+        return res.status(404).json({ ok: false, message: `Agent "${name}" not found` });
+    }
+    try {
+        console.log(`[restart] Stopping agent ${name}...`);
+        await runAsync(`${SBIN}/nfstop ${name} 2>&1`, 60000);
+        console.log(`[restart] Starting agent ${name}...`);
+        await runAsync(`${ENV_VARS} ${SBIN}/nfstart ${name} 2>&1`, 60000);
+        res.json({ ok: true, message: `Agent "${name}" restarted` });
+    } catch (e) {
+        console.error(`[restart] Agent ${name} restart failed:`, e.message);
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
+// Restart all agents
+app.post('/restart/agents', async (_req, res) => {
+    try {
+        console.log('[restart] Restarting all agents...');
+        await runAsync(`${ENV_VARS} ${SBIN}/restart_agents.sh 2>&1`, 300000);
+        res.json({ ok: true, message: 'All agents restarted' });
+    } catch (e) {
+        console.error('[restart] All agents restart failed:', e.message);
+        res.status(500).json({ ok: false, message: e.message });
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
