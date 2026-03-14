@@ -691,85 +691,151 @@ function logDeploy(msg) {
 }
 
 async function runDeploy(branch) {
-    const step = (name) => logDeploy(`── ${name} ──`);
+    const step = (name) => logDeploy(`\n── ${name} ──`);
+    const startTime = Date.now();
+    const originalBranch = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
+    let stashed = false;
 
     // 1. Stash local changes
-    step('Checking for local changes');
+    step('Step 1/7 — Checking for local changes');
     const status = runCmd(`git -C "${GEO_DIR}" status --porcelain`);
-    let stashed = false;
     if (status) {
-        logDeploy('Stashing local changes...');
-        runCmd(`git -C "${GEO_DIR}" stash push -u -m "deploy-${Date.now()}"`, 30000);
-        stashed = true;
+        const changedFiles = status.split('\n').filter(Boolean);
+        logDeploy(`${changedFiles.length} changed file(s) detected:`);
+        changedFiles.slice(0, 10).forEach(f => logDeploy(`  ${f}`));
+        if (changedFiles.length > 10) logDeploy(`  ... and ${changedFiles.length - 10} more`);
+        logDeploy('Stashing all changes (including untracked)...');
+        try {
+            const stashOut = runCmd(`git -C "${GEO_DIR}" stash push -u -m "deploy-${Date.now()}" 2>&1`, 30000);
+            logDeploy(stashOut);
+            stashed = true;
+        } catch (e) {
+            throw new Error(`Stash failed: ${e.message}`);
+        }
     } else {
         logDeploy('Working directory clean');
     }
 
     // 2. Checkout and pull branch
-    step(`Switching to branch: ${branch}`);
-    runCmd(`git -C "${GEO_DIR}" checkout "${branch}" 2>&1`, 30000);
-    logDeploy('Pulling latest...');
-    runCmd(`git -C "${GEO_DIR}" pull origin "${branch}" 2>&1`, 60000);
+    step(`Step 2/7 — Switching to branch: ${branch}`);
+    logDeploy(`Current branch: ${originalBranch}`);
+    if (branch !== originalBranch) {
+        try {
+            const checkoutOut = runCmd(`git -C "${GEO_DIR}" checkout "${branch}" 2>&1`, 30000);
+            logDeploy(checkoutOut || `Switched to ${branch}`);
+        } catch (e) {
+            throw new Error(`Checkout failed for "${branch}": ${e.message}\nMake sure the branch exists and has no conflicts.`);
+        }
+    } else {
+        logDeploy('Already on target branch');
+    }
+    logDeploy('Pulling latest from origin...');
+    try {
+        const pullOut = runCmd(`git -C "${GEO_DIR}" pull origin "${branch}" 2>&1`, 60000);
+        logDeploy(pullOut || 'Already up to date');
+    } catch (e) {
+        throw new Error(`Pull failed for "${branch}": ${e.message}\nCheck network connectivity and branch existence on remote.`);
+    }
+    const headCommit = runCmd(`git -C "${GEO_DIR}" log -1 --oneline`);
+    logDeploy(`HEAD: ${headCommit}`);
 
     // 3. Apply stash
     if (stashed) {
-        step('Applying stashed changes');
+        step('Step 3/7 — Applying stashed changes');
         try {
-            runCmd(`git -C "${GEO_DIR}" stash pop 2>&1`);
-            logDeploy('Stash applied successfully');
-        } catch {
-            logDeploy('WARNING: Stash had conflicts, cleared. Apply manually: git stash pop');
+            const popOut = runCmd(`git -C "${GEO_DIR}" stash pop 2>&1`);
+            logDeploy(popOut || 'Stash applied successfully');
+        } catch (e) {
+            logDeploy(`WARNING: Stash apply had conflicts.`);
+            logDeploy(`Error: ${e.message}`);
+            logDeploy('Clearing conflicts to proceed with clean deploy...');
             runCmd(`git -C "${GEO_DIR}" checkout -- . 2>/dev/null`);
+            runCmd(`git -C "${GEO_DIR}" clean -fd 2>/dev/null`);
+            logDeploy('Your changes are preserved in stash. After deploy, apply manually:');
+            logDeploy(`  cd ${GEO_DIR} && git stash pop`);
         }
     }
 
     // 4. Stop Tomcat
-    step('Stopping Tomcat');
-    try { runCmd(`${TOMCAT_HOME}/bin/shutdown.sh 2>&1`, 15000); } catch { /* ok */ }
+    step('Step 4/7 — Stopping Tomcat');
+    try {
+        runCmd(`${TOMCAT_HOME}/bin/shutdown.sh 2>&1`, 15000);
+        logDeploy('Shutdown signal sent');
+    } catch {
+        logDeploy('Shutdown script returned error (Tomcat may not be running)');
+    }
     await waitForTomcatStop();
 
     // 5. Gradle build
-    step('Gradle clean + makebuild');
+    step('Step 5/7 — Gradle build');
     logDeploy('Running ./gradlew clean...');
-    const cleanOut = execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew clean 2>&1`, 120000);
-    logDeploy(lastLines(cleanOut, 3));
+    try {
+        const cleanOut = execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew clean 2>&1`, 120000);
+        logDeploy(lastLines(cleanOut, 3));
+    } catch (e) {
+        throw new Error(`Gradle clean failed:\n${lastLines(e.message, 15)}\n\nCheck for disk space issues or Gradle daemon problems.\nTry manually: cd ${GEO_DIR} && ./gradlew clean`);
+    }
 
-    logDeploy('Running ./gradlew makebuild...');
-    const buildOut = execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false 2>&1`, 600000);
-    logDeploy(lastLines(buildOut, 5));
+    logDeploy('Running ./gradlew makebuild (this may take a few minutes)...');
+    try {
+        const buildOut = execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false 2>&1`, 600000);
+        logDeploy(lastLines(buildOut, 5));
+    } catch (e) {
+        const errorLines = lastLines(e.message, 30);
+        // Try to extract the actual compilation error
+        const compileError = e.message.match(/error:.*$/gm);
+        let detail = errorLines;
+        if (compileError) {
+            detail = 'Compilation errors:\n' + compileError.join('\n') + '\n\n' + lastLines(e.message, 10);
+        }
+        throw new Error(`Gradle build failed:\n${detail}\n\nFix the compilation errors and try again.\nTo build manually: cd ${GEO_DIR} && ./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false`);
+    }
+
+    // Verify build output exists
+    const buildDir = `${GEO_DIR}/build/release`;
+    if (!fs.existsSync(`${buildDir}/lib`)) {
+        throw new Error(`Build output missing: ${buildDir}/lib not found.\nGradle may have succeeded but produced no artifacts. Check build.gradle.`);
+    }
+    const jarCount = runCmd(`ls "${buildDir}/lib/"*.jar 2>/dev/null | wc -l`);
+    logDeploy(`Build produced ${jarCount} JAR(s)`);
 
     // 6. Copy artifacts
-    step('Copying artifacts');
-    execSyncDeploy(`
-        cd "${GEO_DIR}" &&
-        rm -rf "${BE_HOME}/lib" "${BE_HOME}/bin" "${BE_HOME}/sbin" "${BE_HOME}/etc" "${BE_HOME}/dev_etc" \
-               "${BE_HOME}/birt_reports" "${BE_HOME}/profilers" "${BE_HOME}/templates" "${BE_HOME}/exports" \
-               "${BE_HOME}/WebContent" "${BE_HOME}/birt_platform" &&
-        mkdir -p "${BE_HOME}/pids" "${BE_HOME}/logs" &&
-        cp -r ./build/release/lib "${BE_HOME}" &&
-        cp -r ./bin "${BE_HOME}" &&
-        cp -r ./sbin "${BE_HOME}" &&
-        cp -r ./birt_platform.tar.gz "${BE_HOME}" &&
-        cp -r ./birt_reports "${BE_HOME}" &&
-        cp -r ./dev_etc "${BE_HOME}" &&
-        cp -r ./etc "${BE_HOME}" &&
-        cp -r ./profilers "${BE_HOME}" &&
-        cp -r ./templates "${BE_HOME}" &&
-        cp -r ./exports "${BE_HOME}" &&
-        cp -r ./WebContent "${BE_HOME}" &&
-        cp "${CONFIG_YML}" "${BE_HOME}/etc/" &&
-        cp ./etc/*.properties "${BE_HOME}/etc/" &&
-        cp ./src/main/resources/*.properties "${BE_HOME}/etc/" &&
-        cp ./etc/hibernate-dbhost.properties "${BE_HOME}/etc/hibernate.properties" &&
-        cp ./src/main/resources/*.xml "${BE_HOME}/etc/"
-    `, 120000);
-    logDeploy('Artifacts copied');
+    step('Step 6/7 — Copying artifacts');
+    try {
+        execSyncDeploy(`
+            cd "${GEO_DIR}" &&
+            rm -rf "${BE_HOME}/lib" "${BE_HOME}/bin" "${BE_HOME}/sbin" "${BE_HOME}/etc" "${BE_HOME}/dev_etc" \
+                   "${BE_HOME}/birt_reports" "${BE_HOME}/profilers" "${BE_HOME}/templates" "${BE_HOME}/exports" \
+                   "${BE_HOME}/WebContent" "${BE_HOME}/birt_platform" &&
+            mkdir -p "${BE_HOME}/pids" "${BE_HOME}/logs" &&
+            cp -r ./build/release/lib "${BE_HOME}" &&
+            cp -r ./bin "${BE_HOME}" &&
+            cp -r ./sbin "${BE_HOME}" &&
+            cp -r ./birt_platform.tar.gz "${BE_HOME}" &&
+            cp -r ./birt_reports "${BE_HOME}" &&
+            cp -r ./dev_etc "${BE_HOME}" &&
+            cp -r ./etc "${BE_HOME}" &&
+            cp -r ./profilers "${BE_HOME}" &&
+            cp -r ./templates "${BE_HOME}" &&
+            cp -r ./exports "${BE_HOME}" &&
+            cp -r ./WebContent "${BE_HOME}" &&
+            cp "${CONFIG_YML}" "${BE_HOME}/etc/" &&
+            cp ./etc/*.properties "${BE_HOME}/etc/" &&
+            cp ./src/main/resources/*.properties "${BE_HOME}/etc/" &&
+            cp ./etc/hibernate-dbhost.properties "${BE_HOME}/etc/hibernate.properties" &&
+            cp ./src/main/resources/*.xml "${BE_HOME}/etc/"
+        `, 120000);
+    } catch (e) {
+        throw new Error(`Artifact copy failed:\n${e.message}\n\nCheck disk space: df -h /\nCheck permissions on ${BE_HOME}`);
+    }
+    logDeploy('Artifacts copied to BEServer');
 
     // Inject billing agents if needed
     const jrunFile = `${BE_HOME}/etc/jrunagents.xml`;
     if (!runCmd(`grep -l BillingManager "${jrunFile}" 2>/dev/null`)) {
-        logDeploy('Injecting billing agents...');
-        execSyncDeploy(`sed -i '/<\\/AGENTLIST>/i \\
+        logDeploy('Injecting billing agents into jrunagents.xml...');
+        try {
+            execSyncDeploy(`sed -i '/<\\/AGENTLIST>/i \\
    <AGENT alias="BillingManager">\\
       <TRAITLIST>\\
          <TRAIT class="com.geowealth.agent.billing.BillingManagerTrait" />\\
@@ -787,23 +853,68 @@ async function runDeploy(branch) {
          <TRAIT class="com.geowealth.agent.billingspecification.BillingSpecificationManagerTrait" />\\
       </TRAITLIST>\\
    </AGENT>' "${jrunFile}"`, 10000);
+            logDeploy('Billing agents injected');
+        } catch (e) {
+            logDeploy(`WARNING: Could not inject billing agents: ${e.message}`);
+        }
+    } else {
+        logDeploy('Billing agents already present in jrunagents.xml');
     }
 
-    // Extract birt platform & copy WebContent to Tomcat
-    execSyncDeploy(`cd "${BE_HOME}" && tar -xzf birt_platform.tar.gz`, 30000);
-    execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
-    logDeploy('WebContent deployed to Tomcat');
+    // Extract birt platform
+    try {
+        execSyncDeploy(`cd "${BE_HOME}" && tar -xzf birt_platform.tar.gz`, 30000);
+        logDeploy('BIRT platform extracted');
+    } catch (e) {
+        logDeploy(`WARNING: BIRT platform extraction failed: ${e.message}`);
+    }
 
-    // Fix known corrupted JARs — replace with originals from gradle cache
+    // Copy WebContent to Tomcat
+    try {
+        execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
+        logDeploy('WebContent deployed to Tomcat');
+    } catch (e) {
+        throw new Error(`Failed to copy WebContent to Tomcat:\n${e.message}\n\nCheck if ${TOMCAT_HOME}/webapps/ROOT/ is writable.`);
+    }
+
+    // Fix known corrupted JARs
     fixCorruptedJars();
 
     // 7. Start Tomcat
-    step('Starting Tomcat');
-    execSyncDeploy(`rm -f "${TOMCAT_HOME}/catalina_pid.txt" && ${TOMCAT_HOME}/bin/startup.sh`, 15000);
-    logDeploy('Tomcat started');
+    step('Step 7/7 — Starting Tomcat');
+    try {
+        execSyncDeploy(`rm -f "${TOMCAT_HOME}/catalina_pid.txt" && ${TOMCAT_HOME}/bin/startup.sh 2>&1`, 15000);
+        logDeploy('Tomcat startup initiated');
+    } catch (e) {
+        throw new Error(`Tomcat failed to start:\n${e.message}\n\nCheck catalina.out for details:\n  tail -50 ${TOMCAT_HOME}/logs/catalina.out`);
+    }
+
+    // Wait a moment and verify Tomcat is responding
+    logDeploy('Waiting for Tomcat to become available...');
+    let tomcatOk = false;
+    for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+            const code = runCmd(`curl -s -o /dev/null -w "%{http_code}" http://localhost:${TOMCAT_PORT}/ 2>/dev/null`);
+            if (code === '200') {
+                tomcatOk = true;
+                break;
+            }
+            logDeploy(`Tomcat not ready yet (HTTP ${code})... retrying`);
+        } catch { /* not ready */ }
+    }
+    if (tomcatOk) {
+        logDeploy('Tomcat is UP and responding (HTTP 200)');
+    } else {
+        logDeploy('WARNING: Tomcat did not respond with HTTP 200 after 60s');
+        logDeploy(`Check logs: tail -100 ${TOMCAT_HOME}/logs/catalina.out`);
+    }
 
     const finalBranch = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
-    step(`Deploy complete — branch: ${finalBranch}`);
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    step(`Deploy complete — branch: ${finalBranch} — ${mins}m ${secs}s`);
 }
 
 function fixCorruptedJars() {
