@@ -818,29 +818,34 @@ async function runDeploy(branch) {
     }
     await waitForTomcatStop();
 
-    // 5. Gradle build
+    // 5. Gradle build (incremental first, full build as fallback)
     step('Step 5/7 — Gradle build');
-    logDeploy('Running ./gradlew clean...');
+    let usedFullBuild = false;
+    logDeploy('Trying incremental build (devClasses + devLib)...');
     try {
-        const cleanOut = execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew clean 2>&1`, 120000);
-        logDeploy(lastLines(cleanOut, 3));
+        const incOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew devClasses devLib 2>&1`, 300000);
+        logDeploy(lastLines(incOut, 5));
     } catch (e) {
-        throw new Error(`Gradle clean failed:\n${lastLines(e.message, 15)}\n\nCheck for disk space issues or Gradle daemon problems.\nTry manually: cd ${GEO_DIR} && ./gradlew clean`);
-    }
-
-    logDeploy('Running ./gradlew makebuild (this may take a few minutes)...');
-    try {
-        const buildOut = execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false 2>&1`, 600000);
-        logDeploy(lastLines(buildOut, 5));
-    } catch (e) {
-        const errorLines = lastLines(e.message, 30);
-        // Try to extract the actual compilation error
-        const compileError = e.message.match(/error:.*$/gm);
-        let detail = errorLines;
-        if (compileError) {
-            detail = 'Compilation errors:\n' + compileError.join('\n') + '\n\n' + lastLines(e.message, 10);
+        logDeploy(`Incremental build failed: ${lastLines(e.message, 5)}`);
+        logDeploy('Falling back to full build...');
+        usedFullBuild = true;
+        try {
+            const cleanOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew clean 2>&1`, 120000);
+            logDeploy(lastLines(cleanOut, 3));
+        } catch (e2) {
+            throw new Error(`Gradle clean failed:\n${lastLines(e2.message, 15)}`);
         }
-        throw new Error(`Gradle build failed:\n${detail}\n\nFix the compilation errors and try again.\nTo build manually: cd ${GEO_DIR} && ./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false`);
+        try {
+            const buildOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false 2>&1`, 600000);
+            logDeploy(lastLines(buildOut, 5));
+        } catch (e2) {
+            const compileError = e2.message.match(/error:.*$/gm);
+            let detail = lastLines(e2.message, 30);
+            if (compileError) {
+                detail = 'Compilation errors:\n' + compileError.join('\n') + '\n\n' + lastLines(e2.message, 10);
+            }
+            throw new Error(`Gradle build failed:\n${detail}`);
+        }
     }
 
     // Verify build output exists
@@ -854,7 +859,7 @@ async function runDeploy(branch) {
     // 6. Copy artifacts
     step('Step 6/7 — Copying artifacts');
     try {
-        execSyncDeploy(`
+        await execSyncDeploy(`
             cd "${GEO_DIR}" &&
             rm -rf "${BE_HOME}/lib" "${BE_HOME}/bin" "${BE_HOME}/sbin" "${BE_HOME}/etc" "${BE_HOME}/dev_etc" \
                    "${BE_HOME}/birt_reports" "${BE_HOME}/profilers" "${BE_HOME}/templates" "${BE_HOME}/exports" \
@@ -887,7 +892,7 @@ async function runDeploy(branch) {
     if (!runCmd(`grep -l BillingManager "${jrunFile}" 2>/dev/null`)) {
         logDeploy('Injecting billing agents into jrunagents.xml...');
         try {
-            execSyncDeploy(`sed -i '/<\\/AGENTLIST>/i \\
+            await execSyncDeploy(`sed -i '/<\\/AGENTLIST>/i \\
    <AGENT alias="BillingManager">\\
       <TRAITLIST>\\
          <TRAIT class="com.geowealth.agent.billing.BillingManagerTrait" />\\
@@ -915,7 +920,7 @@ async function runDeploy(branch) {
 
     // Extract birt platform
     try {
-        execSyncDeploy(`cd "${BE_HOME}" && tar -xzf birt_platform.tar.gz`, 30000);
+        await execSyncDeploy(`cd "${BE_HOME}" && tar -xzf birt_platform.tar.gz`, 30000);
         logDeploy('BIRT platform extracted');
     } catch (e) {
         logDeploy(`WARNING: BIRT platform extraction failed: ${e.message}`);
@@ -923,7 +928,7 @@ async function runDeploy(branch) {
 
     // Copy WebContent to Tomcat
     try {
-        execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
+        await execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
         logDeploy('WebContent deployed to Tomcat');
     } catch (e) {
         throw new Error(`Failed to copy WebContent to Tomcat:\n${e.message}\n\nCheck if ${TOMCAT_HOME}/webapps/ROOT/ is writable.`);
@@ -935,7 +940,7 @@ async function runDeploy(branch) {
     // 7. Start Tomcat
     step('Step 7/7 — Starting Tomcat');
     try {
-        execSyncDeploy(`rm -f "${TOMCAT_HOME}/catalina_pid.txt" && ${TOMCAT_HOME}/bin/startup.sh 2>&1`, 15000);
+        await execSyncDeploy(`rm -f "${TOMCAT_HOME}/catalina_pid.txt" && ${TOMCAT_HOME}/bin/startup.sh 2>&1`, 15000);
         logDeploy('Tomcat startup initiated');
     } catch (e) {
         throw new Error(`Tomcat failed to start:\n${e.message}\n\nCheck catalina.out for details:\n  tail -50 ${TOMCAT_HOME}/logs/catalina.out`);
@@ -1003,11 +1008,12 @@ function fixCorruptedJars() {
 }
 
 function execSyncDeploy(cmd, timeout = 120000) {
-    try {
-        return execSync(cmd, { timeout, encoding: 'utf8', env: DEPLOY_ENV }).trim();
-    } catch (e) {
-        throw new Error(e.stderr || e.stdout || e.message);
-    }
+    return new Promise((resolve, reject) => {
+        exec(cmd, { timeout, encoding: 'utf8', env: DEPLOY_ENV, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+            if (err) reject(new Error(stderr || stdout || err.message));
+            else resolve((stdout || '').trim());
+        });
+    });
 }
 
 function lastLines(str, n) {
