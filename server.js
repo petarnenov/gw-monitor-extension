@@ -773,11 +773,28 @@ async function runDeploy(branch) {
     const originalBranch = runCmdStrict(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
     let stashed = false;
 
-    // 1. Stash local changes
+    // 1. Stash local changes (including assume-unchanged / skip-worktree files)
     step('Step 1/7 — Checking for local changes');
     const status = runCmd(`git -C "${GEO_DIR}" status --porcelain`);
-    if (status) {
-        const changedFiles = status.split('\n').filter(Boolean);
+    // Also check for assume-unchanged and skip-worktree files that git status misses
+    const assumeUnchanged = runCmd(`git -C "${GEO_DIR}" ls-files -v | grep "^[a-z]" | awk '{print $2}'`);
+    const skipWorktree = runCmd(`git -C "${GEO_DIR}" ls-files -v | grep "^S" | awk '{print $2}'`);
+    const hiddenFiles = [assumeUnchanged, skipWorktree].filter(Boolean).join('\n').split('\n').filter(Boolean);
+
+    if (hiddenFiles.length) {
+        logDeploy(`${hiddenFiles.length} assume-unchanged/skip-worktree file(s) detected:`);
+        hiddenFiles.forEach(f => logDeploy(`  ${f}`));
+        logDeploy('Temporarily reverting flags to allow stash...');
+        for (const f of hiddenFiles) {
+            runCmd(`git -C "${GEO_DIR}" update-index --no-assume-unchanged "${f}" 2>/dev/null`);
+            runCmd(`git -C "${GEO_DIR}" update-index --no-skip-worktree "${f}" 2>/dev/null`);
+        }
+    }
+
+    // Re-check status after un-hiding files
+    const fullStatus = runCmd(`git -C "${GEO_DIR}" status --porcelain`);
+    if (fullStatus) {
+        const changedFiles = fullStatus.split('\n').filter(Boolean);
         logDeploy(`${changedFiles.length} changed file(s) detected:`);
         changedFiles.slice(0, 10).forEach(f => logDeploy(`  ${f}`));
         if (changedFiles.length > 10) logDeploy(`  ... and ${changedFiles.length - 10} more`);
@@ -821,7 +838,7 @@ async function runDeploy(branch) {
     const headCommit = runCmd(`git -C "${GEO_DIR}" log -1 --oneline`);
     logDeploy(`HEAD: ${headCommit}`);
 
-    // 3. Apply stash
+    // 3. Apply stash and restore hidden file flags
     if (stashed) {
         step('Step 3/7 — Applying stashed changes');
         try {
@@ -836,6 +853,13 @@ async function runDeploy(branch) {
             logDeploy('Your changes are preserved in stash. After deploy, apply manually:');
             logDeploy(`  cd ${GEO_DIR} && git stash pop`);
         }
+    }
+    // Restore assume-unchanged flags for hidden files
+    if (hiddenFiles.length) {
+        for (const f of hiddenFiles) {
+            runCmd(`git -C "${GEO_DIR}" update-index --assume-unchanged "${f}" 2>/dev/null`);
+        }
+        logDeploy(`Restored assume-unchanged flags for ${hiddenFiles.length} file(s)`);
     }
 
     // 4. Stop Tomcat
