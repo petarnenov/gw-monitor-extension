@@ -68,16 +68,30 @@ function getSystemInfo() {
 
 const TOMCAT_HOME = '/home/petar/AppServer/apache-tomcat-9.0.38';
 
+function checkPlatformReady() {
+    return new Promise((resolve) => {
+        const req = http.get(`http://localhost:${TOMCAT_PORT}/platformOne/checkPlatformStatus.do`, { timeout: 5000 }, (res) => {
+            res.resume();
+            // 302 = redirect to login = platform fully loaded
+            resolve(res.statusCode === 302);
+        });
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+}
+
 function getTomcatStatus() {
     return new Promise((resolve) => {
         const start = Date.now();
-        const req = http.get(`http://localhost:${TOMCAT_PORT}/`, { timeout: 5000 }, (res) => {
+        const req = http.get(`http://localhost:${TOMCAT_PORT}/`, { timeout: 5000 }, async (res) => {
             res.resume();
             const elapsed = Date.now() - start;
             const proc = getTomcatProcess();
+            const ready = res.statusCode === 200 ? await checkPlatformReady() : false;
             resolve({
                 http_port: TOMCAT_PORT, http_code: res.statusCode,
                 response_ms: elapsed, running: res.statusCode === 200,
+                ready,
                 process: proc,
                 threads: getTomcatThreads(proc.pid),
                 jvm: getTomcatJvm(proc.pid),
@@ -90,6 +104,7 @@ function getTomcatStatus() {
             resolve({
                 http_port: TOMCAT_PORT, http_code: 0,
                 response_ms: Date.now() - start, running: false,
+                ready: false,
                 process: proc,
                 threads: getTomcatThreads(proc.pid),
                 jvm: getTomcatJvm(proc.pid),
