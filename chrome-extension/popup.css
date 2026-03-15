@@ -274,6 +274,7 @@ section { margin-bottom: 12px; }
   vertical-align: middle;
 }
 .dot.green { background: var(--dot-green); }
+.dot.yellow { background: #f59e0b; }
 .dot.red { background: var(--dot-red); }
 .dot.gray { background: var(--dot-gray); }
 

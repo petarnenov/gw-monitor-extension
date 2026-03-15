@@ -41,14 +41,16 @@ async function checkStatus() {
         const agentsOk = monitoredHealthy === monitoredTotal;
 
         const tomcatOk = data.tomcat.running;
+        const tomcatReady = data.tomcat.ready;
         const memPct = data.system.memory.used / data.system.memory.total;
         const systemOk = memPct < 0.95;
 
-        const allOk = agentsOk && tomcatOk && systemOk;
+        const allOk = agentsOk && tomcatOk && tomcatReady && systemOk;
 
         // Build list of current problems
         const problems = [];
         if (!tomcatOk) problems.push('Tomcat is down');
+        else if (!tomcatReady) problems.push('Tomcat is starting (platform not ready)');
         if (!systemOk) problems.push(`RAM at ${(memPct * 100).toFixed(0)}%`);
         const downAgents = monitored.filter(a => !a.running || !a.accessible);
         for (const a of downAgents) {

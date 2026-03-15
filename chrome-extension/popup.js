@@ -161,8 +161,11 @@ function render(data, lastCheck) {
     const threads = tom.threads || {};
     const jvm = tom.jvm || {};
 
+    const tomReady = tom.ready;
+    const tomDot = tomOk ? (tomReady ? 'green' : 'yellow') : 'red';
+    const tomLabel = tomOk ? (tomReady ? 'Ready' : 'Starting') : 'Down';
     document.getElementById('tomcat-status').innerHTML =
-        `<span class="dot ${tomOk ? 'green' : 'red'}"></span>${tomOk ? 'Running' : 'Down'} :${tom.http_port}`;
+        `<span class="dot ${tomDot}"></span>${tomLabel} :${tom.http_port}`;
     document.getElementById('tomcat-response').textContent =
         tomOk ? `${tom.response_ms}ms` : `HTTP ${tom.http_code}`;
     document.getElementById('tomcat-uptime').textContent =
