@@ -30,6 +30,16 @@ function runCmd(cmd, timeout = 10000) {
     }
 }
 
+/** Like runCmd but throws on failure instead of returning ''. Use for critical operations. */
+function runCmdStrict(cmd, timeout = 10000) {
+    try {
+        return execSync(cmd, { timeout, encoding: 'utf8' }).trim();
+    } catch (e) {
+        const msg = e.stderr ? e.stderr.toString().trim() : (e.stdout ? e.stdout.toString().trim() : e.message);
+        throw new Error(msg || `Command failed: ${cmd}`);
+    }
+}
+
 function getSystemInfo() {
     const memory = {};
     const memRaw = runCmd('free -b --si');
@@ -760,7 +770,7 @@ function logDeploy(msg) {
 async function runDeploy(branch) {
     const step = (name) => logDeploy(`\n── ${name} ──`);
     const startTime = Date.now();
-    const originalBranch = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
+    const originalBranch = runCmdStrict(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
     let stashed = false;
 
     // 1. Stash local changes
@@ -773,8 +783,8 @@ async function runDeploy(branch) {
         if (changedFiles.length > 10) logDeploy(`  ... and ${changedFiles.length - 10} more`);
         logDeploy('Stashing all changes (including untracked)...');
         try {
-            const stashOut = runCmd(`git -C "${GEO_DIR}" stash push -u -m "deploy-${Date.now()}" 2>&1`, 30000);
-            logDeploy(stashOut);
+            const stashOut = runCmdStrict(`git -C "${GEO_DIR}" stash push -u -m "deploy-${Date.now()}" 2>&1`, 30000);
+            logDeploy(stashOut || 'Stashed');
             stashed = true;
         } catch (e) {
             throw new Error(`Stash failed: ${e.message}`);
@@ -788,17 +798,22 @@ async function runDeploy(branch) {
     logDeploy(`Current branch: ${originalBranch}`);
     if (branch !== originalBranch) {
         try {
-            const checkoutOut = runCmd(`git -C "${GEO_DIR}" checkout "${branch}" 2>&1`, 30000);
+            const checkoutOut = runCmdStrict(`git -C "${GEO_DIR}" checkout "${branch}" 2>&1`, 30000);
             logDeploy(checkoutOut || `Switched to ${branch}`);
         } catch (e) {
             throw new Error(`Checkout failed for "${branch}": ${e.message}\nMake sure the branch exists and has no conflicts.`);
+        }
+        // Verify we actually switched
+        const actualBranch = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
+        if (actualBranch && actualBranch !== branch) {
+            throw new Error(`Checkout verification failed: expected "${branch}" but on "${actualBranch}".`);
         }
     } else {
         logDeploy('Already on target branch');
     }
     logDeploy('Pulling latest from origin...');
     try {
-        const pullOut = runCmd(`git -C "${GEO_DIR}" pull origin "${branch}" 2>&1`, 60000);
+        const pullOut = runCmdStrict(`git -C "${GEO_DIR}" pull origin "${branch}" 2>&1`, 60000);
         logDeploy(pullOut || 'Already up to date');
     } catch (e) {
         throw new Error(`Pull failed for "${branch}": ${e.message}\nCheck network connectivity and branch existence on remote.`);
@@ -810,7 +825,7 @@ async function runDeploy(branch) {
     if (stashed) {
         step('Step 3/7 — Applying stashed changes');
         try {
-            const popOut = runCmd(`git -C "${GEO_DIR}" stash pop 2>&1`);
+            const popOut = runCmdStrict(`git -C "${GEO_DIR}" stash pop 2>&1`);
             logDeploy(popOut || 'Stash applied successfully');
         } catch (e) {
             logDeploy(`WARNING: Stash apply had conflicts.`);
