@@ -701,6 +701,32 @@ app.put('/config/agent/:name/memory', (req, res) => {
 
 const GEO_DIR = '/home/petar/AppServer/geowealth';
 const JAVA_HOME = '/home/petar/AppServer/amazon-corretto-17.0.18.9.1-linux-x64';
+
+// GitLab credentials from environment — enables HTTPS auth for git fetch/pull.
+// Set GITLAB_TOKEN (personal access token or deploy token) and optionally GITLAB_USER.
+const GITLAB_TOKEN = process.env.GITLAB_TOKEN || '';
+const GITLAB_USER = process.env.GITLAB_USER || 'oauth2';
+
+// If a token is available, set up GIT_ASKPASS so git commands authenticate via HTTPS.
+// Also switch the remote URL from SSH to HTTPS if needed.
+const GIT_ASKPASS_SCRIPT = '/tmp/gw-git-askpass.sh';
+if (GITLAB_TOKEN) {
+    fs.writeFileSync(GIT_ASKPASS_SCRIPT, `#!/bin/sh\ncase "$1" in\n*Username*) echo "${GITLAB_USER}";;\n*Password*) echo "${GITLAB_TOKEN}";;\nesac\n`, { mode: 0o700 });
+
+    // Inject into process.env so all execSync calls (runCmd, runCmdStrict) inherit it
+    process.env.GIT_ASKPASS = GIT_ASKPASS_SCRIPT;
+    process.env.GIT_TERMINAL_PROMPT = '0';
+
+    // Switch remote from SSH to HTTPS if currently SSH
+    const currentUrl = runCmd(`git -C "${GEO_DIR}" remote get-url origin`);
+    const sshMatch = currentUrl.match(/^git@gitlab\.com:(.+?)(?:\.git)?$/);
+    if (sshMatch) {
+        const httpsUrl = `https://gitlab.com/${sshMatch[1]}.git`;
+        runCmd(`git -C "${GEO_DIR}" remote set-url origin "${httpsUrl}"`);
+        console.log(`[git] Switched remote origin to HTTPS: ${httpsUrl}`);
+    }
+}
+
 const DEPLOY_ENV = {
     ...process.env,
     JAVA_HOME,
@@ -708,6 +734,7 @@ const DEPLOY_ENV = {
     GEO_TEMPLATE_NAME: CONFIG_YML,
     GEO_ENV,
     GEO_SERVER,
+    ...(GITLAB_TOKEN ? { GIT_ASKPASS: GIT_ASKPASS_SCRIPT, GIT_TERMINAL_PROMPT: '0' } : {}),
 };
 
 let deployInProgress = false;
