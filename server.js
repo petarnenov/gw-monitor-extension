@@ -566,6 +566,47 @@ app.put('/config/agent/:name/autostart', (req, res) => {
     }
 });
 
+// ── Free RAM ──
+
+app.post('/system/free-ram', async (_req, res) => {
+    const results = [];
+    try {
+        // 1. Drop filesystem caches
+        const syncOut = runCmd('sync');
+        const dropOut = runCmd('echo 3 | sudo tee /proc/sys/vm/drop_caches 2>&1');
+        results.push('Filesystem caches dropped');
+
+        // 2. Trigger GC on all Java processes (Tomcat + agents)
+        const javaPids = runCmd("pgrep -f 'java' 2>/dev/null");
+        if (javaPids) {
+            const pids = javaPids.split('\n').filter(Boolean);
+            for (const pid of pids) {
+                const gcOut = runCmd(`jcmd ${pid} GC.run 2>/dev/null`);
+                if (gcOut && !gcOut.includes('not found')) {
+                    results.push(`GC triggered for PID ${pid}`);
+                }
+            }
+        }
+
+        // 3. Get memory before/after
+        const memAfter = runCmd('free -b --si');
+        let available = '';
+        for (const line of memAfter.split('\n')) {
+            if (line.startsWith('Mem:')) {
+                const p = line.split(/\s+/);
+                available = `Available: ${(+p[6] / 1e9).toFixed(1)} GB`;
+            }
+        }
+        results.push(available);
+
+        console.log('[system] Free RAM:', results.join(', '));
+        res.json({ ok: true, message: results.join('\n') });
+    } catch (e) {
+        console.error('[system] Free RAM error:', e.message);
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
 // ── Command execution ──
 
 const ALLOWED_CMD_PREFIXES = [

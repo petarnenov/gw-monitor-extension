@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('stop-tomcat-btn').addEventListener('click', stopTomcat);
     document.getElementById('restart-tomcat-btn').addEventListener('click', restartTomcat);
     document.getElementById('restart-all-agents-btn').addEventListener('click', restartAllAgents);
+    document.getElementById('free-ram-btn').addEventListener('click', freeRam);
     document.getElementById('logs-tomcat-btn').addEventListener('click', () => openLogViewer('tomcat'));
     document.getElementById('log-close-btn').addEventListener('click', closeLogViewer);
     document.getElementById('log-modal-backdrop').addEventListener('click', closeLogViewer);
@@ -712,6 +713,31 @@ async function toggleAutostart(name, enabled, cb) {
 }
 
 // ── Restart functions ──
+
+async function freeRam() {
+    if (!confirm('Free RAM? This will drop filesystem caches and trigger GC on all Java processes.')) return;
+    const btn = document.getElementById('free-ram-btn');
+    btn.disabled = true;
+    btn.textContent = '\u23F3 Freeing...';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/system/free-ram`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(60000),
+        });
+        const data = await res.json();
+        btn.textContent = data.ok ? '\u2713 Done' : '\u2717 Failed';
+        if (!data.ok) showError('Free RAM failed: ' + data.message);
+    } catch (e) {
+        btn.textContent = '\u2717 Error';
+        showError('Free RAM error: ' + e.message);
+    }
+    setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '&#x1F9F9; Free RAM';
+        refresh();
+    }, 3000);
+}
 
 async function stopTomcat() {
     if (!confirm('Stop Tomcat? This will kill all Tomcat processes.')) return;
