@@ -431,6 +431,18 @@ section { margin-bottom: 12px; }
 }
 .stash-btn:hover { background: var(--bar-warn); color: #fff; }
 .stash-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.pull-btn {
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  padding: 4px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pull-btn:hover { background: var(--accent); color: #fff; }
+.pull-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .deploy-btn {
   background: var(--accent);
   color: #fff;

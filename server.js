@@ -820,6 +820,22 @@ app.get('/deploy/stream', (req, res) => {
     req.on('close', () => clearInterval(interval));
 });
 
+app.post('/pull', (req, res) => {
+    if (deployInProgress) {
+        return res.status(409).json({ ok: false, message: 'Deploy in progress, cannot pull now' });
+    }
+    const branch = req.body.branch;
+    if (!branch || !/^[\w\-\/\.]+$/.test(branch)) {
+        return res.status(400).json({ ok: false, message: 'Invalid branch name' });
+    }
+    try {
+        const out = runCmdStrict(`git -C "${GEO_DIR}" pull origin "${branch}" 2>&1`, 60000);
+        res.json({ ok: true, message: out || 'Already up to date' });
+    } catch (e) {
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
 app.post('/deploy', async (req, res) => {
     if (deployInProgress) {
         return res.status(409).json({ ok: false, message: 'Deploy already in progress' });

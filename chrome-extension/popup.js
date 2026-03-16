@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('log-modal-backdrop').addEventListener('click', closeLogViewer);
     document.getElementById('log-refresh-btn').addEventListener('click', refreshLogViewer);
     document.getElementById('log-lines-select').addEventListener('change', refreshLogViewer);
+    document.getElementById('pull-btn').addEventListener('click', startPull);
     document.getElementById('deploy-btn').addEventListener('click', startDeploy);
     document.getElementById('stash-btn').addEventListener('click', stashChanges);
     setupTypeahead();
@@ -384,6 +385,7 @@ function updateDirtyState(dirty, changes) {
         stashBtn.classList.add('hidden');
         deployBtn.disabled = !selectedBranch;
     }
+    document.getElementById('pull-btn').disabled = !selectedBranch;
 }
 
 function setupTypeahead() {
@@ -467,6 +469,7 @@ function selectBranch(name) {
     document.getElementById('branch-input').value = name;
     document.getElementById('branch-dropdown').classList.add('hidden');
     document.getElementById('deploy-btn').disabled = gitDirty || !name;
+    document.getElementById('pull-btn').disabled = !name;
 }
 
 async function stashChanges() {
@@ -487,6 +490,31 @@ async function stashChanges() {
     }
     btn.disabled = false;
     btn.textContent = 'Stash';
+}
+
+async function startPull() {
+    if (!selectedBranch) return;
+    const btn = document.getElementById('pull-btn');
+    btn.disabled = true;
+    btn.textContent = 'Pulling...';
+    const baseUrl = await getApiUrl();
+    try {
+        const resp = await fetch(`${baseUrl}/pull`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ branch: selectedBranch }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.message || 'Pull failed');
+        document.getElementById('deploy-log-wrap').classList.remove('hidden');
+        document.getElementById('deploy-log').textContent = data.message;
+    } catch (e) {
+        document.getElementById('deploy-log-wrap').classList.remove('hidden');
+        document.getElementById('deploy-log').textContent = 'Pull error: ' + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Pull';
+    }
 }
 
 async function startDeploy() {
