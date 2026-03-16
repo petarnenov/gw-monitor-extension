@@ -1015,25 +1015,16 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
 
     // 6. Gradle build (incremental first, full build as fallback)
     step('Step 6/8 — Gradle build');
-    let usedFullBuild = false;
+    let incremental = false;
     logDeploy('Trying incremental build (devClasses + devLib + jar)...');
     try {
         const incOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew devClasses devLib jar 2>&1`, 300000);
         logDeploy(lastLines(incOut, 5));
-        // Copy the freshly built JAR into build/release so the deploy step picks it up
-        const jarSrc = `${GEO_DIR}/build/libs/geowealth.jar`;
-        const releaseLib = `${GEO_DIR}/build/release/lib`;
-        const releaseWebInfLib = `${GEO_DIR}/build/release/WebContent/WEB-INF/lib`;
-        for (const dest of [releaseLib, releaseWebInfLib]) {
-            if (fs.existsSync(dest)) {
-                fs.copyFileSync(jarSrc, `${dest}/geowealth.jar`);
-                logDeploy(`Updated geowealth.jar in ${dest.replace(GEO_DIR + '/', '')}`);
-            }
-        }
+        incremental = true;
+        logDeploy('Incremental build succeeded');
     } catch (e) {
         logDeploy(`Incremental build failed: ${lastLines(e.message, 5)}`);
         logDeploy('Falling back to full build...');
-        usedFullBuild = true;
         try {
             const cleanOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew clean 2>&1`, 120000);
             logDeploy(lastLines(cleanOut, 3));
@@ -1054,15 +1045,29 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
     }
 
     // Verify build output exists
-    const buildDir = `${GEO_DIR}/build/release`;
-    if (!fs.existsSync(`${buildDir}/lib`)) {
-        throw new Error(`Build output missing: ${buildDir}/lib not found.\nGradle may have succeeded but produced no artifacts. Check build.gradle.`);
+    if (incremental) {
+        if (!fs.existsSync(`${GEO_DIR}/devBuild/lib`)) {
+            throw new Error('Incremental build output missing: devBuild/lib not found.');
+        }
+        if (!fs.existsSync(`${GEO_DIR}/build/libs/geowealth.jar`)) {
+            throw new Error('Incremental build output missing: build/libs/geowealth.jar not found.');
+        }
+        const jarCount = runCmd(`ls "${GEO_DIR}/devBuild/lib/"*.jar 2>/dev/null | wc -l`);
+        logDeploy(`Incremental build: ${jarCount} dependency JAR(s) + geowealth.jar`);
+    } else {
+        const buildDir = `${GEO_DIR}/build/release`;
+        if (!fs.existsSync(`${buildDir}/lib`)) {
+            throw new Error(`Build output missing: ${buildDir}/lib not found.\nGradle may have succeeded but produced no artifacts. Check build.gradle.`);
+        }
+        const jarCount = runCmd(`ls "${buildDir}/lib/"*.jar 2>/dev/null | wc -l`);
+        logDeploy(`Full build produced ${jarCount} JAR(s)`);
     }
-    const jarCount = runCmd(`ls "${buildDir}/lib/"*.jar 2>/dev/null | wc -l`);
-    logDeploy(`Build produced ${jarCount} JAR(s)`);
 
     // 7. Copy artifacts
     step('Step 7/8 — Copying artifacts');
+    const libCopyCmd = incremental
+        ? `mkdir -p "${BE_HOME}/lib" && cp -r ./devBuild/lib/* "${BE_HOME}/lib/" && cp ./build/libs/geowealth.jar "${BE_HOME}/lib/"`
+        : `cp -r ./build/release/lib "${BE_HOME}"`;
     try {
         await execSyncDeploy(`
             cd "${GEO_DIR}" &&
@@ -1070,7 +1075,7 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
                    "${BE_HOME}/birt_reports" "${BE_HOME}/profilers" "${BE_HOME}/templates" "${BE_HOME}/exports" \
                    "${BE_HOME}/WebContent" "${BE_HOME}/birt_platform" &&
             mkdir -p "${BE_HOME}/pids" "${BE_HOME}/logs" &&
-            cp -r ./build/release/lib "${BE_HOME}" &&
+            ${libCopyCmd} &&
             cp -r ./bin "${BE_HOME}" &&
             cp -r ./sbin "${BE_HOME}" &&
             cp -r ./birt_platform.tar.gz "${BE_HOME}" &&
@@ -1090,7 +1095,7 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
     } catch (e) {
         throw new Error(`Artifact copy failed:\n${e.message}\n\nCheck disk space: df -h /\nCheck permissions on ${BE_HOME}`);
     }
-    logDeploy('Artifacts copied to BEServer');
+    logDeploy(`Artifacts copied to BEServer (${incremental ? 'incremental' : 'full'} build)`);
 
     // Inject billing agents if needed
     const jrunFile = `${BE_HOME}/etc/jrunagents.xml`;
@@ -1133,8 +1138,20 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
 
     // Copy WebContent to Tomcat
     try {
-        await execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
-        logDeploy('WebContent deployed to Tomcat');
+        if (incremental) {
+            // Incremental: copy WebContent from source tree, then overlay fresh JARs
+            await execSyncDeploy(`
+                rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* &&
+                cp -r "${GEO_DIR}/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/" &&
+                mkdir -p "${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib" &&
+                cp -r "${GEO_DIR}/devBuild/lib/"* "${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib/" &&
+                cp "${GEO_DIR}/build/libs/geowealth.jar" "${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib/"
+            `, 30000);
+            logDeploy('WebContent deployed to Tomcat (incremental: source + devBuild JARs)');
+        } else {
+            await execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
+            logDeploy('WebContent deployed to Tomcat (full build)');
+        }
     } catch (e) {
         throw new Error(`Failed to copy WebContent to Tomcat:\n${e.message}\n\nCheck if ${TOMCAT_HOME}/webapps/ROOT/ is writable.`);
     }
