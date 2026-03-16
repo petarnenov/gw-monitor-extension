@@ -547,23 +547,15 @@ app.post('/restart/agents', async (_req, res) => {
     }
 });
 
-// Restart the status server itself
+// Restart the status server itself via pm2
 app.post('/restart/server', (_req, res) => {
     console.log('[restart] Status server restart requested');
-    res.json({ ok: true, message: 'Server restarting' });
+    res.json({ ok: true, message: 'Server restarting via pm2' });
     setTimeout(() => {
-        // Use shell with sleep so the new process starts AFTER this one exits and releases the port.
-        const sq = s => "'" + s.replace(/'/g, "'\\''") + "'";
-        const cmd = [sq(process.execPath), ...process.argv.slice(1).map(sq)].join(' ');
-        const logFile = sq(require('path').join(__dirname, 'server.log'));
-        const child = spawn('sh', ['-c', `sleep 2 && ${cmd} >> ${logFile} 2>&1`], {
-            cwd: __dirname,
+        spawn('pm2', ['restart', 'gw-monitor'], {
             detached: true,
             stdio: 'ignore',
-            env: { ...process.env },
-        });
-        child.unref();
-        process.exit(0);
+        }).unref();
     }, 500);
 });
 
