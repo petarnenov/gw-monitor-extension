@@ -31,9 +31,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const url = await getApiUrl();
     document.getElementById('server-url-input').value = url;
 
+    await loadPendingAgents();
     await loadBranches();
     await checkDeployStatus();
     await loadAndRender();
+    // Resume polling for any agents still pending from a previous popup session
+    resumePendingPolls();
 });
 
 async function applyTheme() {
@@ -105,6 +108,11 @@ async function loadAndRender() {
         return;
     }
     if (stored.lastStatus) {
+        // Clear stale/resolved pending agents using shared reconcile logic
+        if (pendingAgents.size > 0) {
+            const changed = reconcilePendingAgents(stored.lastStatus);
+            if (changed) await savePendingAgents();
+        }
         render(stored.lastStatus, stored.lastCheck);
     } else {
         showError('No data yet — click refresh');
@@ -119,12 +127,14 @@ async function refresh() {
     try {
         const res = await fetch(`${baseUrl}/status`, { signal: AbortSignal.timeout(15000) });
         const data = await res.json();
-        const agentsOk = data.agents.healthy === data.agents.total;
-        const tomcatOk = data.tomcat.running;
+        // Reconcile pending agents with fresh data
+        if (pendingAgents.size > 0) {
+            const changed = reconcilePendingAgents(data);
+            if (changed) await savePendingAgents();
+        }
         const now = Date.now();
         await chrome.storage.local.set({
-            lastStatus: data, lastCheck: now,
-            healthy: agentsOk && tomcatOk, error: null,
+            lastStatus: data, lastCheck: now, error: null,
         });
         render(data, now);
     } catch (e) {
@@ -132,6 +142,7 @@ async function refresh() {
     } finally {
         btn.classList.remove('spinning');
     }
+    // Let background recalculate healthy/badge
     chrome.runtime.sendMessage({ action: 'refresh' }).catch(() => {});
 }
 
@@ -234,8 +245,11 @@ function render(data, lastCheck) {
             ? `<label class="autostart-toggle" title="Autostart"><input type="checkbox" class="autostart-cb" data-agent="${escapeHtml(a.name)}" ${autoChecked}><span class="toggle-slider"></span></label>`
             : '';
 
+        const isPending = pendingAgents.has(a.name);
         let statusHtml;
-        if (a.running) {
+        if (isPending) {
+            statusHtml = '<span class="dot yellow"></span>Starting\u2026';
+        } else if (a.running) {
             statusHtml = `<span class="dot ${a.accessible ? 'green' : 'red'}"></span>${a.accessible ? 'OK' : 'DOWN'}`;
         } else {
             statusHtml = '<span class="dot gray"></span>Stopped';
@@ -259,8 +273,8 @@ function render(data, lastCheck) {
             <td>${statusHtml}</td>
             <td>${a.running ? `<button class="log-agent-btn log-btn-sm" data-agent="${escapeHtml(a.name)}" title="View logs">&#x1F4C4;</button>` : ''}</td>
             <td class="action-btns">
-              ${a.running ? `<button class="stop-agent-btn stop-btn-sm" data-agent="${escapeHtml(a.name)}" title="Stop ${escapeHtml(a.name)}">&#x25A0;</button>` : ''}
-              <button class="restart-agent-btn restart-btn-sm" data-agent="${escapeHtml(a.name)}" title="${a.running ? 'Restart' : 'Start'} ${escapeHtml(a.name)}">&#x21bb;</button>
+              ${a.running ? `<button class="stop-agent-btn stop-btn-sm" data-agent="${escapeHtml(a.name)}" title="Stop ${escapeHtml(a.name)}"${isPending ? ' disabled' : ''}>&#x25A0;</button>` : ''}
+              <button class="restart-agent-btn restart-btn-sm" data-agent="${escapeHtml(a.name)}" title="${a.running ? 'Restart' : 'Start'} ${escapeHtml(a.name)}"${isPending ? ' disabled' : ''}>&#x21bb;</button>
             </td>
         `;
         tbody.appendChild(tr);
@@ -793,6 +807,11 @@ async function stopAgent(name, btn) {
     if (!confirm(`Stop agent "${name}"?`)) return;
     btn.disabled = true;
     btn.textContent = '\u23F3';
+    // Clear pending state — user intentionally stopping this agent
+    if (pendingAgents.has(name)) {
+        pendingAgents.delete(name);
+        await savePendingAgents();
+    }
     const baseUrl = await getApiUrl();
     try {
         const res = await fetch(`${baseUrl}/stop/agent/${name}`, {
@@ -814,10 +833,39 @@ async function stopAgent(name, btn) {
     }, 3000);
 }
 
+// Agents currently restarting — shown as "Starting..." until confirmed accessible.
+// Persisted to chrome.storage with timestamps so stale entries expire.
+let pendingAgents = new Map();  // name → timestamp
+const PENDING_TTL_MS = 5 * 60 * 1000;  // 5 minutes max
+let pollTimer = null;  // single shared poll loop
+
+async function loadPendingAgents() {
+    const { pendingRestarts } = await chrome.storage.local.get('pendingRestarts');
+    pendingAgents = new Map();
+    if (pendingRestarts && typeof pendingRestarts === 'object') {
+        const now = Date.now();
+        for (const [name, ts] of Object.entries(pendingRestarts)) {
+            if (now - ts < PENDING_TTL_MS) {
+                pendingAgents.set(name, ts);
+            }
+        }
+    }
+}
+
+async function savePendingAgents() {
+    await chrome.storage.local.set({ pendingRestarts: Object.fromEntries(pendingAgents) });
+}
+
+function resumePendingPolls() {
+    if (pendingAgents.size > 0) startPollLoop();
+}
+
 async function restartAgent(name, btn) {
     if (!confirm(`Restart agent "${name}"?`)) return;
     btn.disabled = true;
     btn.textContent = '⏳';
+    pendingAgents.set(name, Date.now());
+    await savePendingAgents();
     const baseUrl = await getApiUrl();
     try {
         const res = await fetch(`${baseUrl}/restart/agent/${name}`, {
@@ -825,18 +873,90 @@ async function restartAgent(name, btn) {
             signal: AbortSignal.timeout(120000),
         });
         const data = await res.json();
-        btn.textContent = data.ok ? '✓' : '✗';
-        if (data.ok) chrome.runtime.sendMessage({ action: 'agentStarted', name }).catch(() => {});
-        if (!data.ok) showError(`Agent "${name}" restart failed: ` + data.message);
+        if (!data.ok) {
+            pendingAgents.delete(name);
+            await savePendingAgents();
+            btn.textContent = '✗';
+            showError(`Agent "${name}" restart failed: ` + data.message);
+            setTimeout(() => { btn.disabled = false; btn.innerHTML = '&#x21bb;'; }, 3000);
+            return;
+        }
+        chrome.runtime.sendMessage({ action: 'agentStarted', name }).catch(() => {});
+        startPollLoop();
     } catch (e) {
+        pendingAgents.delete(name);
+        await savePendingAgents();
         btn.textContent = '✗';
         showError(`Agent "${name}" restart error: ` + e.message);
+        setTimeout(() => { btn.disabled = false; btn.innerHTML = '&#x21bb;'; }, 3000);
     }
-    setTimeout(() => {
-        btn.disabled = false;
-        btn.innerHTML = '&#x21bb;';
-        refresh();
-    }, 3000);
+}
+
+/** Single shared poll loop for all pending agents. Guarded against reentrance. */
+let pollInFlight = false;
+let pollErrorCount = 0;
+
+function startPollLoop() {
+    if (pollTimer) return;  // already running
+    pollErrorCount = 0;
+    pollTimer = setInterval(pollPendingAgents, 5000);
+}
+
+function stopPollLoop() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+/** Check status data and resolve any pending agents that are now accessible. */
+function reconcilePendingAgents(data) {
+    let changed = false;
+    const now = Date.now();
+    // Expire stale entries
+    for (const [name, ts] of [...pendingAgents]) {
+        if (now - ts >= PENDING_TTL_MS) {
+            pendingAgents.delete(name);
+            changed = true;
+        }
+    }
+    // Resolve accessible agents
+    for (const [name] of [...pendingAgents]) {
+        const agent = data.agents.agents.find(a => a.name === name);
+        if (agent && agent.running && agent.accessible) {
+            pendingAgents.delete(name);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+async function pollPendingAgents() {
+    if (pendingAgents.size === 0) { stopPollLoop(); return; }
+    if (pollInFlight) return;  // previous tick still running
+    pollInFlight = true;
+
+    try {
+        const baseUrl = await getApiUrl();
+        const res = await fetch(`${baseUrl}/status`, { signal: AbortSignal.timeout(15000) });
+        const data = await res.json();
+        const changed = reconcilePendingAgents(data);
+        if (changed) await savePendingAgents();
+        const checkNow = Date.now();
+        await chrome.storage.local.set({
+            lastStatus: data, lastCheck: checkNow, error: null,
+        });
+        render(data, checkNow);
+        pollErrorCount = 0;
+        if (pendingAgents.size === 0) stopPollLoop();
+    } catch (e) {
+        pollErrorCount++;
+        if (pollErrorCount === 3) {
+            console.error('[poll] Repeated poll failures:', e);
+            showError('Status poll failing: ' + e.message);
+        }
+    }
+    finally { pollInFlight = false; }
 }
 
 async function restartAllAgents() {
@@ -845,23 +965,47 @@ async function restartAllAgents() {
     btn.disabled = true;
     btn.textContent = '⏳ Restarting...';
     const baseUrl = await getApiUrl();
+
+    // Mark all running/autostart agents as pending, tracking which ones we added
+    const bulkPendingNames = [];
+    const stored = await chrome.storage.local.get(['lastStatus', 'lastCheck']);
+    if (stored.lastStatus) {
+        const now = Date.now();
+        for (const a of stored.lastStatus.agents?.agents || []) {
+            if (a.running || a.autostart !== false) {
+                if (!pendingAgents.has(a.name)) bulkPendingNames.push(a.name);
+                pendingAgents.set(a.name, now);
+            }
+        }
+        await savePendingAgents();
+        render(stored.lastStatus, stored.lastCheck);
+    }
+
     try {
         const res = await fetch(`${baseUrl}/restart/agents`, {
             method: 'POST',
             signal: AbortSignal.timeout(300000),
         });
         const data = await res.json();
-        btn.textContent = data.ok ? '✓ Done' : '✗ Failed';
-        if (!data.ok) showError('Agents restart failed: ' + data.message);
+        if (data.ok) {
+            btn.textContent = '⏳ Waiting...';
+            startPollLoop();
+        } else {
+            btn.textContent = '✗ Failed';
+            showError('Agents restart failed: ' + data.message);
+            for (const n of bulkPendingNames) pendingAgents.delete(n);
+            await savePendingAgents();
+        }
     } catch (e) {
         btn.textContent = '✗ Error';
         showError('Agents restart error: ' + e.message);
+        for (const n of bulkPendingNames) pendingAgents.delete(n);
+        await savePendingAgents();
     }
     setTimeout(() => {
         btn.disabled = false;
         btn.innerHTML = '&#x21bb; Restart All';
-        refresh();
-    }, 5000);
+    }, 3000);
 }
 
 function showError(msg) {

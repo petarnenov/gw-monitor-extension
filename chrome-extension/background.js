@@ -29,9 +29,17 @@ async function checkStatus() {
         // Only monitor agents that should be running:
         // - autostart enabled, unless manually stopped
         // - manually started via the extension
-        const { manuallyStarted = [], manuallyStopped = [] } = await chrome.storage.local.get(['manuallyStarted', 'manuallyStopped']);
+        const { manuallyStarted = [], manuallyStopped = [], pendingRestarts = {} } = await chrome.storage.local.get(['manuallyStarted', 'manuallyStopped', 'pendingRestarts']);
+        const now = Date.now();
+        const PENDING_TTL_MS = 5 * 60 * 1000;
+        const pendingNames = new Set(
+            Object.entries(pendingRestarts)
+                .filter(([, ts]) => now - ts < PENDING_TTL_MS)
+                .map(([name]) => name)
+        );
         const monitored = (data.agents.agents || []).filter(a => {
             if (manuallyStopped.includes(a.name)) return false;
+            if (pendingNames.has(a.name)) return false;  // skip agents being restarted
             if (a.autostart === true) return true;
             if (manuallyStarted.includes(a.name)) return true;
             return false;
@@ -61,8 +69,8 @@ async function checkStatus() {
         if (!allOk && (prevHealthy || hasNewProblems(problems, prevProblems))) {
             notify(problems);
         }
-        // Notify recovery
-        if (allOk && !prevHealthy) {
+        // Notify recovery — but not while agents are still pending restart
+        if (allOk && !prevHealthy && pendingNames.size === 0) {
             chrome.notifications.create('gw-recovery', {
                 type: 'basic',
                 iconUrl: 'icons/icon-green-128.png',
@@ -72,7 +80,13 @@ async function checkStatus() {
             });
         }
 
-        prevHealthy = allOk;
+        // Don't mark as healthy while agents are still pending restart,
+        // so recovery notification can fire once they clear.
+        if (pendingNames.size === 0) {
+            prevHealthy = allOk;
+        } else if (!allOk) {
+            prevHealthy = false;
+        }
         prevProblems = problems;
 
         await chrome.storage.local.set({

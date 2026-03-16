@@ -527,6 +527,7 @@ app.post('/restart/agent/:name', async (req, res) => {
         await runAsync(`${SBIN}/nfstop ${name} 2>&1`, 60000);
         console.log(`[restart] Starting agent ${name}...`);
         await runAsync(`${ENV_VARS} ${SBIN}/nfstart ${name} 2>&1`, 60000);
+        console.log(`[restart] Agent ${name} start command completed, accessibility will be checked by client`);
         res.json({ ok: true, message: `Agent "${name}" restarted` });
     } catch (e) {
         console.error(`[restart] Agent ${name} restart failed:`, e.message);
