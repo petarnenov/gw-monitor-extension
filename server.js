@@ -858,6 +858,108 @@ app.post('/deploy', async (req, res) => {
     }
 });
 
+// ── Quick Deploy: jar + copy + restart agents + restart Tomcat ──
+app.post('/quick-deploy', async (req, res) => {
+    if (deployInProgress) {
+        return res.status(409).json({ ok: false, message: 'Deploy already in progress' });
+    }
+    // agents: optional array of agent names to restart (default: none)
+    // restartTomcat: boolean (default: true)
+    const { agents = [], restartTomcat = true } = req.body || {};
+
+    deployInProgress = true;
+    deployLog = [];
+    res.json({ ok: true, message: 'Quick deploy started' });
+
+    try {
+        await runQuickDeploy(agents, restartTomcat);
+    } catch (e) {
+        logDeploy(`FAILED: ${e.message}`);
+    } finally {
+        deployInProgress = false;
+    }
+});
+
+async function runQuickDeploy(agents, restartTomcat) {
+    const startTime = Date.now();
+    const step = (name) => logDeploy(`\n── ${name} ──`);
+
+    // 1. Gradle jar
+    step('Step 1/4 — Gradle jar');
+    try {
+        const out = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew jar 2>&1`, 120000);
+        logDeploy(lastLines(out, 5));
+        logDeploy('Jar built successfully');
+    } catch (e) {
+        throw new Error(`Gradle jar failed:\n${lastLines(e.message, 15)}`);
+    }
+
+    const jarPath = `${GEO_DIR}/build/libs/geowealth.jar`;
+    if (!fs.existsSync(jarPath)) {
+        throw new Error(`Jar not found at ${jarPath}`);
+    }
+
+    // 2. Copy jar to BEServer/lib and Tomcat
+    step('Step 2/4 — Copying jar');
+    try {
+        await execSyncDeploy(`cp "${jarPath}" "${BE_HOME}/lib/geowealth.jar"`, 10000);
+        logDeploy(`Copied to ${BE_HOME}/lib/`);
+        await execSyncDeploy(`cp "${jarPath}" "${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib/geowealth.jar"`, 10000);
+        logDeploy(`Copied to Tomcat WEB-INF/lib/`);
+    } catch (e) {
+        throw new Error(`Jar copy failed:\n${e.message}`);
+    }
+
+    // 3. Restart requested agents
+    step('Step 3/4 — Restarting agents');
+    if (agents.length === 0) {
+        logDeploy('No agents selected for restart, skipping');
+    }
+    for (const name of agents) {
+        if (!/^[a-z][a-z0-9]*$/.test(name)) {
+            logDeploy(`Skipping invalid agent name: ${name}`);
+            continue;
+        }
+        try {
+            logDeploy(`Restarting ${name}...`);
+            await runAsync(`${SBIN}/nfstop ${name} 2>&1`, 60000).catch(() => {});
+            await runAsync(`${ENV_VARS} ${SBIN}/nfstart ${name} 2>&1`, 60000);
+            logDeploy(`${name} restarted`);
+        } catch (e) {
+            logDeploy(`WARNING: ${name} restart failed: ${e.message}`);
+        }
+    }
+
+    // 4. Restart Tomcat
+    step('Step 4/4 — Restarting Tomcat');
+    if (!restartTomcat) {
+        logDeploy('Tomcat restart skipped');
+    } else {
+        try {
+            logDeploy('Stopping Tomcat...');
+            await runAsync(`${TOMCAT_BIN}/shutdown.sh 2>&1`, 30000).catch(() => {});
+            await runAsync('sleep 5');
+            const pids = runCmd("pgrep -f catalina.startup.Bootstrap");
+            if (pids) {
+                for (const pid of pids.split('\n').filter(Boolean)) {
+                    await runAsync(`kill -9 ${pid} 2>/dev/null`).catch(() => {});
+                }
+                await runAsync('sleep 2');
+            }
+            // Clean stale PID files
+            runCmd(`rm -f ${TOMCAT_HOME}/bin/*.pid`);
+            logDeploy('Starting Tomcat...');
+            await runAsync(`${TOMCAT_BIN}/startup.sh 2>&1`);
+            logDeploy('Tomcat started');
+        } catch (e) {
+            throw new Error(`Tomcat restart failed: ${e.message}`);
+        }
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    logDeploy(`\nQuick deploy completed in ${elapsed}s`);
+}
+
 function logDeploy(msg) {
     const ts = new Date().toLocaleTimeString();
     deployLog.push(`[${ts}] ${msg}`);

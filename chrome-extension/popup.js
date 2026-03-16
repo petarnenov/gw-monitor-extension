@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('log-lines-select').addEventListener('change', refreshLogViewer);
     document.getElementById('pull-btn').addEventListener('click', startPull);
     document.getElementById('deploy-btn').addEventListener('click', startDeploy);
+    document.getElementById('quick-deploy-btn').addEventListener('click', startQuickDeploy);
     document.getElementById('stash-btn').addEventListener('click', stashChanges);
     setupTypeahead();
 
@@ -539,6 +540,71 @@ async function startDeploy() {
         document.getElementById('deploy-log').textContent = 'Error: ' + e.message;
         btn.disabled = false;
         btn.textContent = 'Deploy';
+    }
+}
+
+async function startQuickDeploy() {
+    const optionsEl = document.getElementById('quick-deploy-options');
+    // First click: show options. Second click: run.
+    if (optionsEl.classList.contains('hidden')) {
+        optionsEl.classList.remove('hidden');
+        return;
+    }
+
+    const restartTomcat = document.getElementById('qd-restart-tomcat').checked;
+    const agentsRaw = document.getElementById('qd-agents').value.trim();
+    const agents = agentsRaw ? agentsRaw.split(/[\s,]+/).filter(Boolean) : [];
+
+    const parts = ['Build jar & copy'];
+    if (agents.length) parts.push(`restart agents: ${agents.join(', ')}`);
+    if (restartTomcat) parts.push('restart Tomcat');
+    if (!confirm(`Quick Deploy?\n\n${parts.join('\n')}\n\nNo git pull — uses current local code.`)) return;
+
+    const btn = document.getElementById('quick-deploy-btn');
+    btn.disabled = true;
+    btn.textContent = 'Deploying...';
+    document.getElementById('deploy-log-wrap').classList.remove('hidden');
+    document.getElementById('deploy-log').textContent = 'Starting quick deploy...';
+
+    const baseUrl = await getApiUrl();
+    try {
+        await fetch(`${baseUrl}/quick-deploy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agents, restartTomcat }),
+        });
+        streamQuickDeployLog();
+    } catch (e) {
+        document.getElementById('deploy-log').textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+        btn.textContent = 'Quick Deploy';
+    }
+}
+
+async function streamQuickDeployLog() {
+    const baseUrl = await getApiUrl();
+    const btn = document.getElementById('quick-deploy-btn');
+
+    try {
+        const es = new EventSource(`${baseUrl}/deploy/stream`);
+        es.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            renderDeployLog(data.log);
+        };
+        es.addEventListener('done', () => {
+            es.close();
+            btn.disabled = false;
+            btn.textContent = 'Quick Deploy';
+            document.getElementById('quick-deploy-options').classList.add('hidden');
+            setTimeout(refresh, 3000);
+        });
+        es.onerror = () => {
+            es.close();
+            btn.disabled = false;
+            btn.textContent = 'Quick Deploy';
+        };
+    } catch {
+        pollDeployLog();
     }
 }
 

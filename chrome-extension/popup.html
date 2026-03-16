@@ -70,9 +70,16 @@
           <button id="stash-btn" class="stash-btn hidden" title="Stash all changes (including untracked)">Stash</button>
           <button id="pull-btn" class="pull-btn" title="Pull latest changes from origin" disabled>Pull</button>
           <button id="deploy-btn" class="deploy-btn" title="Pull, build & deploy" disabled>Deploy</button>
+          <button id="quick-deploy-btn" class="quick-deploy-btn" title="Build jar, copy &amp; restart (no git)">Quick Deploy</button>
         </div>
         <div id="deploy-current" class="deploy-current"></div>
         <div id="deploy-dirty" class="deploy-dirty hidden"></div>
+        <div id="quick-deploy-options" class="hidden">
+          <div class="qd-options-row">
+            <label><input type="checkbox" id="qd-restart-tomcat" checked> Restart Tomcat</label>
+            <label class="qd-agents-label">Agents: <input id="qd-agents" type="text" placeholder="e.g. policyrules,cacheagents" spellcheck="false"></label>
+          </div>
+        </div>
         <div id="deploy-log-wrap" class="hidden">
           <pre id="deploy-log"></pre>
         </div>

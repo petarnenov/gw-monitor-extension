@@ -456,6 +456,37 @@ section { margin-bottom: 12px; }
 }
 .deploy-btn:hover { background: var(--accent-hover); }
 .deploy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.quick-deploy-btn {
+  background: #e67e22;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.quick-deploy-btn:hover { background: #cf6d17; }
+.quick-deploy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.qd-options-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  margin-top: 6px;
+  color: var(--text-muted);
+}
+.qd-options-row label { display: flex; align-items: center; gap: 4px; }
+.qd-agents-label input {
+  width: 180px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card-bg);
+  color: var(--text);
+}
 .deploy-current {
   font-size: 12px;
   color: var(--text-muted);
