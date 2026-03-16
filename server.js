@@ -869,9 +869,41 @@ async function runDeploy(branch) {
     const startTime = Date.now();
     const originalBranch = runCmdStrict(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
     let stashed = false;
+    let hiddenFiles = [];
+
+    try {
+        await runDeploySteps(branch, step, startTime, originalBranch, (s) => { stashed = s; }, (h) => { hiddenFiles = h; });
+    } catch (e) {
+        // Attempt to restore stash on original branch (like reload.sh on_error)
+        if (stashed) {
+            logDeploy(`\nDeploy failed. Attempting to restore stash on original branch (${originalBranch})...`);
+            try {
+                runCmd(`git -C "${GEO_DIR}" checkout "${originalBranch}" 2>/dev/null`, 15000);
+                const popOut = runCmd(`git -C "${GEO_DIR}" stash pop 2>&1`);
+                if (popOut) logDeploy(popOut);
+                logDeploy(`Stashed changes restored on ${originalBranch}.`);
+            } catch {
+                logDeploy(`WARNING: Could not auto-restore stash. Run manually:`);
+                logDeploy(`  cd ${GEO_DIR} && git checkout ${originalBranch} && git stash pop`);
+            }
+        }
+        // Restore assume-unchanged flags even on failure
+        if (hiddenFiles.length) {
+            for (const f of hiddenFiles) {
+                runCmd(`git -C "${GEO_DIR}" update-index --assume-unchanged "${f}" 2>/dev/null`);
+            }
+            logDeploy(`Restored assume-unchanged flags for ${hiddenFiles.length} file(s)`);
+        }
+        throw e;
+    }
+}
+
+async function runDeploySteps(branch, step, startTime, originalBranch, setStashed, setHiddenFiles) {
+    let stashed = false;
 
     // 1. Stash local changes (including assume-unchanged / skip-worktree files)
-    step('Step 1/7 — Checking for local changes');
+    step('Step 1/8 — Checking for local changes');
+    // (Steps: 1-Stash, 2-Fetch, 3-Checkout+Pull, 4-Apply stash, 5-Stop Tomcat, 6-Build, 7-Copy artifacts, 8-Start Tomcat)
     const status = runCmd(`git -C "${GEO_DIR}" status --porcelain`);
     // Also check for assume-unchanged and skip-worktree files that git status misses
     const assumeUnchanged = runCmd(`git -C "${GEO_DIR}" ls-files -v | grep "^[a-z]" | awk '{print $2}'`);
@@ -900,15 +932,27 @@ async function runDeploy(branch) {
             const stashOut = runCmdStrict(`git -C "${GEO_DIR}" stash push -u -m "deploy-${Date.now()}" 2>&1`, 30000);
             logDeploy(stashOut || 'Stashed');
             stashed = true;
+            setStashed(true);
         } catch (e) {
             throw new Error(`Stash failed: ${e.message}`);
         }
     } else {
         logDeploy('Working directory clean');
     }
+    setHiddenFiles(hiddenFiles);
 
-    // 2. Checkout and pull branch
-    step(`Step 2/7 — Switching to branch: ${branch}`);
+    // 2. Fetch latest from remote
+    step('Step 2/8 — Fetching latest branches');
+    try {
+        const fetchOut = runCmdStrict(`git -C "${GEO_DIR}" fetch --prune 2>&1`, 30000);
+        logDeploy(fetchOut || 'Fetch complete');
+    } catch (e) {
+        logDeploy(`WARNING: Fetch failed: ${e.message}`);
+        logDeploy('Proceeding with locally available data...');
+    }
+
+    // 3. Checkout and pull branch
+    step(`Step 3/8 — Switching to branch: ${branch}`);
     logDeploy(`Current branch: ${originalBranch}`);
     if (branch !== originalBranch) {
         try {
@@ -935,9 +979,9 @@ async function runDeploy(branch) {
     const headCommit = runCmd(`git -C "${GEO_DIR}" log -1 --oneline`);
     logDeploy(`HEAD: ${headCommit}`);
 
-    // 3. Apply stash and restore hidden file flags
+    // 4. Apply stash and restore hidden file flags
     if (stashed) {
-        step('Step 3/7 — Applying stashed changes');
+        step('Step 4/8 — Applying stashed changes');
         try {
             const popOut = runCmdStrict(`git -C "${GEO_DIR}" stash pop 2>&1`);
             logDeploy(popOut || 'Stash applied successfully');
@@ -959,8 +1003,8 @@ async function runDeploy(branch) {
         logDeploy(`Restored assume-unchanged flags for ${hiddenFiles.length} file(s)`);
     }
 
-    // 4. Stop Tomcat
-    step('Step 4/7 — Stopping Tomcat');
+    // 5. Stop Tomcat
+    step('Step 5/8 — Stopping Tomcat');
     try {
         runCmd(`${TOMCAT_HOME}/bin/shutdown.sh 2>&1`, 15000);
         logDeploy('Shutdown signal sent');
@@ -969,8 +1013,8 @@ async function runDeploy(branch) {
     }
     await waitForTomcatStop();
 
-    // 5. Gradle build (incremental first, full build as fallback)
-    step('Step 5/7 — Gradle build');
+    // 6. Gradle build (incremental first, full build as fallback)
+    step('Step 6/8 — Gradle build');
     let usedFullBuild = false;
     logDeploy('Trying incremental build (devClasses + devLib + jar)...');
     try {
@@ -1017,8 +1061,8 @@ async function runDeploy(branch) {
     const jarCount = runCmd(`ls "${buildDir}/lib/"*.jar 2>/dev/null | wc -l`);
     logDeploy(`Build produced ${jarCount} JAR(s)`);
 
-    // 6. Copy artifacts
-    step('Step 6/7 — Copying artifacts');
+    // 7. Copy artifacts
+    step('Step 7/8 — Copying artifacts');
     try {
         await execSyncDeploy(`
             cd "${GEO_DIR}" &&
@@ -1098,8 +1142,8 @@ async function runDeploy(branch) {
     // Fix known corrupted JARs
     fixCorruptedJars();
 
-    // 7. Start Tomcat
-    step('Step 7/7 — Starting Tomcat');
+    // 8. Start Tomcat
+    step('Step 8/8 — Starting Tomcat');
     try {
         await execSyncDeploy(`rm -f "${TOMCAT_HOME}/catalina_pid.txt" && ${TOMCAT_HOME}/bin/startup.sh 2>&1`, 15000);
         logDeploy('Tomcat startup initiated');
