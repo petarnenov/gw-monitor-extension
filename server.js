@@ -9,7 +9,7 @@
  */
 
 const express = require('express');
-const { execSync, exec } = require('child_process');
+const { execSync, exec, spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const yaml = require('js-yaml');
@@ -545,6 +545,26 @@ app.post('/restart/agents', async (_req, res) => {
         console.error('[restart] All agents restart failed:', e.message);
         res.status(500).json({ ok: false, message: e.message });
     }
+});
+
+// Restart the status server itself
+app.post('/restart/server', (_req, res) => {
+    console.log('[restart] Status server restart requested');
+    res.json({ ok: true, message: 'Server restarting' });
+    setTimeout(() => {
+        // Use shell with sleep so the new process starts AFTER this one exits and releases the port.
+        const sq = s => "'" + s.replace(/'/g, "'\\''") + "'";
+        const cmd = [sq(process.execPath), ...process.argv.slice(1).map(sq)].join(' ');
+        const logFile = sq(require('path').join(__dirname, 'server.log'));
+        const child = spawn('sh', ['-c', `sleep 2 && ${cmd} >> ${logFile} 2>&1`], {
+            cwd: __dirname,
+            detached: true,
+            stdio: 'ignore',
+            env: { ...process.env },
+        });
+        child.unref();
+        process.exit(0);
+    }, 500);
 });
 
 app.put('/config/agent/:name/autostart', (req, res) => {

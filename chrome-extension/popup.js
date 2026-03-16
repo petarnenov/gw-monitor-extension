@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('restart-tomcat-btn').addEventListener('click', restartTomcat);
     document.getElementById('restart-all-agents-btn').addEventListener('click', restartAllAgents);
     document.getElementById('free-ram-btn').addEventListener('click', freeRam);
+    document.getElementById('restart-server-btn').addEventListener('click', restartServer);
     document.getElementById('logs-tomcat-btn').addEventListener('click', () => openLogViewer('tomcat'));
     document.getElementById('log-close-btn').addEventListener('click', closeLogViewer);
     document.getElementById('log-modal-backdrop').addEventListener('click', closeLogViewer);
@@ -751,6 +752,37 @@ async function freeRam() {
         btn.innerHTML = '&#x1F9F9; Free RAM';
         refresh();
     }, 3000);
+}
+
+async function restartServer() {
+    if (!confirm('Restart the status server?')) return;
+    const btn = document.getElementById('restart-server-btn');
+    btn.disabled = true;
+    btn.textContent = '\u23F3 Restarting...';
+    const baseUrl = await getApiUrl();
+    try {
+        await fetch(`${baseUrl}/restart/server`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(10000),
+        });
+    } catch {
+        // Expected — server exits before responding sometimes
+    }
+    // Poll until server is back (up to 30 seconds)
+    for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+            await fetch(`${baseUrl}/status`, { signal: AbortSignal.timeout(3000) });
+            // Server is back
+            btn.disabled = false;
+            btn.innerHTML = '&#x21bb; Server';
+            await refresh();
+            return;
+        } catch { /* not up yet */ }
+    }
+    btn.disabled = false;
+    btn.innerHTML = '&#x21bb; Server';
+    showError('Server did not come back after restart');
 }
 
 async function stopTomcat() {
