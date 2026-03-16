@@ -972,10 +972,20 @@ async function runDeploy(branch) {
     // 5. Gradle build (incremental first, full build as fallback)
     step('Step 5/7 — Gradle build');
     let usedFullBuild = false;
-    logDeploy('Trying incremental build (devClasses + devLib)...');
+    logDeploy('Trying incremental build (devClasses + devLib + jar)...');
     try {
-        const incOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew devClasses devLib 2>&1`, 300000);
+        const incOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew devClasses devLib jar 2>&1`, 300000);
         logDeploy(lastLines(incOut, 5));
+        // Copy the freshly built JAR into build/release so the deploy step picks it up
+        const jarSrc = `${GEO_DIR}/build/libs/geowealth.jar`;
+        const releaseLib = `${GEO_DIR}/build/release/lib`;
+        const releaseWebInfLib = `${GEO_DIR}/build/release/WebContent/WEB-INF/lib`;
+        for (const dest of [releaseLib, releaseWebInfLib]) {
+            if (fs.existsSync(dest)) {
+                fs.copyFileSync(jarSrc, `${dest}/geowealth.jar`);
+                logDeploy(`Updated geowealth.jar in ${dest.replace(GEO_DIR + '/', '')}`);
+            }
+        }
     } catch (e) {
         logDeploy(`Incremental build failed: ${lastLines(e.message, 5)}`);
         logDeploy('Falling back to full build...');
