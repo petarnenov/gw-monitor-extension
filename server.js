@@ -579,6 +579,28 @@ app.put('/config/agent/:name/autostart', (req, res) => {
     }
 });
 
+// ── Clear Swap ──
+
+app.post('/system/clear-swap', async (_req, res) => {
+    try {
+        // swapoff -a moves all swap pages back to RAM, then swapon -a re-enables swap
+        runCmdStrict('sudo swapoff -a && sudo swapon -a', 120000);
+        const memAfter = runCmd('free -b --si');
+        let swapInfo = '';
+        for (const line of memAfter.split('\n')) {
+            if (line.startsWith('Swap:')) {
+                const p = line.split(/\s+/);
+                swapInfo = `Swap used: ${(+p[2] / 1e9).toFixed(1)} GB / ${(+p[1] / 1e9).toFixed(1)} GB`;
+            }
+        }
+        console.log('[system] Clear swap:', swapInfo);
+        res.json({ ok: true, message: `Swap cleared. ${swapInfo}` });
+    } catch (e) {
+        console.error('[system] Clear swap error:', e.message);
+        res.status(500).json({ ok: false, message: e.message });
+    }
+});
+
 // ── Free RAM ──
 
 app.post('/system/free-ram', async (_req, res) => {

@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('restart-tomcat-btn').addEventListener('click', restartTomcat);
     document.getElementById('restart-all-agents-btn').addEventListener('click', restartAllAgents);
     document.getElementById('free-ram-btn').addEventListener('click', freeRam);
+    document.getElementById('clear-swap-btn').addEventListener('click', clearSwap);
     document.getElementById('restart-server-btn').addEventListener('click', restartServer);
     document.getElementById('logs-tomcat-btn').addEventListener('click', () => openLogViewer('tomcat'));
     document.getElementById('log-close-btn').addEventListener('click', closeLogViewer);
@@ -844,6 +845,31 @@ async function freeRam() {
     setTimeout(() => {
         btn.disabled = false;
         btn.innerHTML = '&#x1F9F9; Free RAM';
+        refresh();
+    }, 3000);
+}
+
+async function clearSwap() {
+    if (!confirm('Clear swap? This will run swapoff/swapon which may briefly increase RAM usage.')) return;
+    const btn = document.getElementById('clear-swap-btn');
+    btn.disabled = true;
+    btn.textContent = '\u23F3 Clearing...';
+    const baseUrl = await getApiUrl();
+    try {
+        const res = await fetch(`${baseUrl}/system/clear-swap`, {
+            method: 'POST',
+            signal: AbortSignal.timeout(120000),
+        });
+        const data = await res.json();
+        btn.textContent = data.ok ? '\u2713 Done' : '\u2717 Failed';
+        if (!data.ok) showError('Clear swap failed: ' + data.message);
+    } catch (e) {
+        btn.textContent = '\u2717 Error';
+        showError('Clear swap error: ' + e.message);
+    }
+    setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = '&#x1F9F9; Clear Swap';
         refresh();
     }, 3000);
 }

@@ -1,0 +1,5 @@
+# Passwordless sudo for gw-monitor-extension server
+# Install: sudo cp sudoers-gw-monitor /etc/sudoers.d/gw-monitor && sudo chmod 440 /etc/sudoers.d/gw-monitor
+petar ALL=(ALL) NOPASSWD: /usr/bin/tee /proc/sys/vm/drop_caches
+petar ALL=(ALL) NOPASSWD: /usr/sbin/swapoff -a
+petar ALL=(ALL) NOPASSWD: /usr/sbin/swapon -a
