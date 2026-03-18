@@ -1,13 +1,11 @@
-const DEFAULT_URL = 'http://localhost:7103';
+/**
+ * Background service worker — health monitoring, badge updates, notifications.
+ * Uses shared modules via importScripts.
+ */
+importScripts('shared/storage.js', 'shared/api-client.js', 'shared/pending-agents.js');
 
-// Track previous state to only notify on NEW problems
 let prevHealthy = true;
 let prevProblems = [];
-
-async function getApiUrl() {
-    const { serverUrl } = await chrome.storage.local.get('serverUrl');
-    return serverUrl || DEFAULT_URL;
-}
 
 chrome.runtime.onInstalled.addListener(() => {
     chrome.alarms.create('checkStatus', { periodInMinutes: 1 });
@@ -21,25 +19,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 async function checkStatus() {
-    const baseUrl = await getApiUrl();
     try {
-        const res = await fetch(`${baseUrl}/status`, { signal: AbortSignal.timeout(10000) });
-        const data = await res.json();
+        const data = await ApiClient.getStatus(10000);
 
-        // Only monitor agents that should be running:
-        // - autostart enabled, unless manually stopped
-        // - manually started via the extension
-        const { manuallyStarted = [], manuallyStopped = [], pendingRestarts = {} } = await chrome.storage.local.get(['manuallyStarted', 'manuallyStopped', 'pendingRestarts']);
-        const now = Date.now();
-        const PENDING_TTL_MS = 5 * 60 * 1000;
-        const pendingNames = new Set(
-            Object.entries(pendingRestarts)
-                .filter(([, ts]) => now - ts < PENDING_TTL_MS)
-                .map(([name]) => name)
-        );
+        const { manuallyStarted = [], manuallyStopped = [], pendingRestarts = {} } =
+            await AppStorage.get([StorageKeys.MANUALLY_STARTED, StorageKeys.MANUALLY_STOPPED, StorageKeys.PENDING_RESTARTS]);
+
+        const pendingNames = PendingAgents.getPendingSet(pendingRestarts);
+
         const monitored = (data.agents.agents || []).filter(a => {
             if (manuallyStopped.includes(a.name)) return false;
-            if (pendingNames.has(a.name)) return false;  // skip agents being restarted
+            if (pendingNames.has(a.name)) return false;
             if (a.autostart === true) return true;
             if (manuallyStarted.includes(a.name)) return true;
             return false;
@@ -55,7 +45,6 @@ async function checkStatus() {
 
         const allOk = agentsOk && tomcatOk && tomcatReady && systemOk;
 
-        // Build list of current problems
         const problems = [];
         if (!tomcatOk) problems.push('Tomcat is down');
         else if (!tomcatReady) problems.push('Tomcat is starting (platform not ready)');
@@ -65,23 +54,19 @@ async function checkStatus() {
             problems.push(`${a.name} is ${a.running ? 'not accessible' : 'stopped'}`);
         }
 
-        // Notify only on transition from healthy to unhealthy, or new problems
         if (!allOk && (prevHealthy || hasNewProblems(problems, prevProblems))) {
             notify(problems);
         }
-        // Notify recovery — but not while agents are still pending restart
         if (allOk && !prevHealthy && pendingNames.size === 0) {
             chrome.notifications.create('gw-recovery', {
                 type: 'basic',
                 iconUrl: 'icons/icon-green-128.png',
-                title: 'GeoWealth Server — Recovered',
+                title: 'Server Monitor — Recovered',
                 message: `All systems OK — ${monitoredHealthy}/${monitoredTotal} agents healthy`,
                 priority: 1,
             });
         }
 
-        // Don't mark as healthy while agents are still pending restart,
-        // so recovery notification can fire once they clear.
         if (pendingNames.size === 0) {
             prevHealthy = allOk;
         } else if (!allOk) {
@@ -89,22 +74,21 @@ async function checkStatus() {
         }
         prevProblems = problems;
 
-        await chrome.storage.local.set({
-            lastStatus: data,
-            lastCheck: Date.now(),
-            healthy: allOk,
-            error: null,
+        await AppStorage.set({
+            [StorageKeys.LAST_STATUS]: data,
+            [StorageKeys.LAST_CHECK]: Date.now(),
+            [StorageKeys.HEALTHY]: allOk,
+            [StorageKeys.ERROR]: null,
         });
 
         const downNames = downAgents.map(a => a.name);
         updateBadge(allOk, monitoredHealthy, monitoredTotal, false, downNames);
     } catch (e) {
-        // Notify server unreachable (only on transition)
         if (prevHealthy) {
             chrome.notifications.create('gw-unreachable', {
                 type: 'basic',
                 iconUrl: 'icons/icon-red-128.png',
-                title: 'GeoWealth Server — Unreachable',
+                title: 'Server Monitor — Unreachable',
                 message: 'Cannot reach status API: ' + e.message,
                 priority: 2,
             });
@@ -112,10 +96,10 @@ async function checkStatus() {
         prevHealthy = false;
         prevProblems = ['Server unreachable'];
 
-        await chrome.storage.local.set({
-            lastCheck: Date.now(),
-            healthy: false,
-            error: e.message,
+        await AppStorage.set({
+            [StorageKeys.LAST_CHECK]: Date.now(),
+            [StorageKeys.HEALTHY]: false,
+            [StorageKeys.ERROR]: e.message,
         });
         updateBadge(false, 0, 0, true);
     }
@@ -131,7 +115,7 @@ function notify(problems) {
     chrome.notifications.create('gw-alert-' + Date.now(), {
         type: 'basic',
         iconUrl: 'icons/icon-red-128.png',
-        title: `GeoWealth Server — ${count} problem${count > 1 ? 's' : ''}`,
+        title: `Server Monitor — ${count} problem${count > 1 ? 's' : ''}`,
         message,
         priority: 2,
     });
@@ -148,12 +132,11 @@ function updateBadge(allOk, healthy, total, unreachable = false, downNames = [])
     } else {
         chrome.action.setBadgeText({ text: `${healthy}` });
         chrome.action.setBadgeBackgroundColor({ color: '#EF4444' });
-        const names = downNames.length ? '\n⬇ ' + downNames.join(', ') : '';
+        const names = downNames.length ? '\n\u2B07 ' + downNames.join(', ') : '';
         chrome.action.setTitle({ title: `Issues — ${healthy}/${total} agents healthy${names}` });
     }
 }
 
-// Open in new tab when extension icon is clicked
 chrome.action.onClicked.addListener(() => {
     chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
 });
@@ -174,17 +157,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 async function trackManualStart(name) {
-    const { manuallyStarted = [], manuallyStopped = [] } = await chrome.storage.local.get(['manuallyStarted', 'manuallyStopped']);
-    await chrome.storage.local.set({
-        manuallyStarted: manuallyStarted.includes(name) ? manuallyStarted : [...manuallyStarted, name],
-        manuallyStopped: manuallyStopped.filter(n => n !== name),
+    const { manuallyStarted = [], manuallyStopped = [] } =
+        await AppStorage.get([StorageKeys.MANUALLY_STARTED, StorageKeys.MANUALLY_STOPPED]);
+    await AppStorage.set({
+        [StorageKeys.MANUALLY_STARTED]: manuallyStarted.includes(name) ? manuallyStarted : [...manuallyStarted, name],
+        [StorageKeys.MANUALLY_STOPPED]: manuallyStopped.filter(n => n !== name),
     });
 }
 
 async function trackManualStop(name) {
-    const { manuallyStarted = [], manuallyStopped = [] } = await chrome.storage.local.get(['manuallyStarted', 'manuallyStopped']);
-    await chrome.storage.local.set({
-        manuallyStarted: manuallyStarted.filter(n => n !== name),
-        manuallyStopped: manuallyStopped.includes(name) ? manuallyStopped : [...manuallyStopped, name],
+    const { manuallyStarted = [], manuallyStopped = [] } =
+        await AppStorage.get([StorageKeys.MANUALLY_STARTED, StorageKeys.MANUALLY_STOPPED]);
+    await AppStorage.set({
+        [StorageKeys.MANUALLY_STARTED]: manuallyStarted.filter(n => n !== name),
+        [StorageKeys.MANUALLY_STOPPED]: manuallyStopped.includes(name) ? manuallyStopped : [...manuallyStopped, name],
     });
 }

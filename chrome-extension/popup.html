@@ -177,6 +177,21 @@
     </div>
   </div>
 
-  <script src="popup.js"></script>
+  <!-- Shared modules -->
+  <script src="shared/storage.js"></script>
+  <script src="shared/api-client.js"></script>
+  <script src="shared/pending-agents.js"></script>
+  <!-- Popup utilities -->
+  <script src="popup/utils.js"></script>
+  <script src="popup/theme.js"></script>
+  <!-- Renderers -->
+  <script src="popup/renderers/settings.js"></script>
+  <script src="popup/renderers/system-stats.js"></script>
+  <script src="popup/renderers/app-server.js"></script>
+  <script src="popup/renderers/log-viewer.js"></script>
+  <script src="popup/renderers/processes.js"></script>
+  <script src="popup/renderers/deploy.js"></script>
+  <!-- Entry point (must be last) -->
+  <script src="popup/main.js"></script>
 </body>
 </html>
