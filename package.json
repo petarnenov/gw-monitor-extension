@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "main": "server/index.js",
   "scripts": {
-    "start": "node server/index.js --config ./config.yml"
+    "start": "node server/index.js --config ./config.yml",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop gw-monitor",
+    "pm2:restart": "pm2 restart gw-monitor",
+    "pm2:logs": "pm2 logs gw-monitor --lines 100"
   },
   "dependencies": {
     "express": "^5.2.1",
