@@ -1,14 +1,11 @@
 const fs = require('fs');
 const { runCmd } = require('../utils');
 
-function registerRoutes(app, config) {
+function registerRoutes(app, config, adapters) {
     app.get('/logs/tomcat', (req, res) => {
         const lines = parseInt(req.query.lines, 10) || 200;
         const capped = Math.min(lines, 2000);
-        const mainLog = config.app_server.logs && config.app_server.logs.main
-            ? config.app_server.logs.main
-            : 'logs/catalina.out';
-        const logFile = `${config.app_server.home}/${mainLog}`;
+        const logFile = adapters.appServer.getLogPath();
         try {
             const output = runCmd(`tail -n ${capped} "${logFile}" 2>/dev/null`, 15000);
             res.type('text/plain').send(output || '(empty)');
@@ -22,12 +19,14 @@ function registerRoutes(app, config) {
         if (!/^[a-z][a-z0-9]*$/.test(name)) {
             return res.status(400).type('text/plain').send('Invalid agent name');
         }
+        if (!adapters.processManager) {
+            return res.status(404).type('text/plain').send('No process manager configured');
+        }
         const lines = parseInt(req.query.lines, 10) || 200;
         const capped = Math.min(lines, 2000);
-        const logFileName = config.agents && config.agents.log_file ? config.agents.log_file : 'stdout.log';
-        const logFile = `${config.paths.logs}/${name}/${logFileName}`;
+        const logFile = adapters.processManager.getLogPath(name);
         if (!fs.existsSync(logFile)) {
-            return res.status(404).type('text/plain').send(`Log not found: ${name}/${logFileName}`);
+            return res.status(404).type('text/plain').send(`Log not found: ${logFile}`);
         }
         try {
             const output = runCmd(`tail -n ${capped} "${logFile}" 2>/dev/null`, 15000);

@@ -34,10 +34,13 @@ const deployPipeline = require('./modules/deploy-pipeline');
 const logStreamer = require('./modules/log-streamer');
 const commandExec = require('./modules/command-exec');
 
-// ── Setup git auth and build deploy environment ──
+// ── Setup git auth, deploy environment, and adapters ──
 
 const gitAuthResult = gitOps.setupGitAuth(config);
 const deployEnv = gitOps.buildDeployEnv(config, gitAuthResult);
+
+const { createAdapters } = require('./adapters/factory');
+const adapters = createAdapters(config, deployEnv);
 
 // ── Express app ──
 
@@ -59,8 +62,8 @@ app.use(express.json());
 app.get('/status', async (_req, res) => {
     const [system, tomcat, agentsData] = await Promise.all([
         systemMonitor.getSystemInfo(),
-        appServer.getAppServerStatus(config),
-        processManager.getProcesses(config),
+        adapters.appServer.getStatus(),
+        adapters.processManager ? adapters.processManager.getAll() : { agents: [], total: 0, running: 0, healthy: 0 },
     ]);
     res.json({ timestamp: Date.now() / 1000, system, tomcat, agents: agentsData });
 });
@@ -85,11 +88,11 @@ app.get('/config/client', (_req, res) => {
 // ── Register module routes ──
 
 systemMonitor.registerRoutes(app, config);
-appServer.registerRoutes(app, config);
-processManager.registerRoutes(app, config);
+appServer.registerRoutes(app, config, adapters);
+processManager.registerRoutes(app, config, adapters);
 gitOps.registerRoutes(app, config);
-deployPipeline.registerRoutes(app, config, deployEnv);
-logStreamer.registerRoutes(app, config);
+deployPipeline.registerRoutes(app, config, adapters);
+logStreamer.registerRoutes(app, config, adapters);
 commandExec.registerRoutes(app, config, deployEnv);
 
 // ── Start server ──
