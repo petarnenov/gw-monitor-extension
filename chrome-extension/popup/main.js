@@ -31,12 +31,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     const baseUrl = await ApiClient.getBaseUrl();
     document.getElementById('server-url-input').value = baseUrl;
 
+    // Fetch server name from config
+    loadServerName();
+
     await PendingAgents.load();
     await loadBranches();
     await checkDeployStatus();
     await loadAndRender();
     resumePendingPolls();
 });
+
+async function loadServerName() {
+    try {
+        const cfg = await ApiClient.getClientConfig();
+        if (cfg.name) {
+            document.getElementById('server-name').textContent = cfg.name;
+        }
+    } catch { /* keep default */ }
+}
 
 async function loadAndRender() {
     const stored = await AppStorage.get([
