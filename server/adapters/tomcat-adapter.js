@@ -58,6 +58,7 @@ class TomcatAdapter extends AppServerAdapter {
                     http_port: this.port, http_code: res.statusCode,
                     response_ms: elapsed, running: res.statusCode === 200,
                     ready,
+                    cluster: this.getClusterStatus(),
                     process: proc,
                     threads: this._getThreads(proc.pid),
                     jvm: this.getRuntimeConfig(proc.pid),
@@ -71,6 +72,7 @@ class TomcatAdapter extends AppServerAdapter {
                     http_port: this.port, http_code: 0,
                     response_ms: Date.now() - start, running: false,
                     ready: false,
+                    cluster: this.getClusterStatus(),
                     process: proc,
                     threads: this._getThreads(proc.pid),
                     jvm: this.getRuntimeConfig(proc.pid),
@@ -95,6 +97,82 @@ class TomcatAdapter extends AppServerAdapter {
             req.on('error', () => resolve(false));
             req.on('timeout', () => { req.destroy(); resolve(false); });
         });
+    }
+
+    getClusterStatus() {
+        const logPath = this.getLogPath();
+        // Read last 300 lines of catalina.out to find Akka cluster status
+        const tail = runCmd(`tail -300 "${logPath}" 2>/dev/null`);
+        if (!tail) return { healthy: null, missingServices: [], message: 'Cannot read logs' };
+
+        const lines = tail.split('\n');
+        let healthy = null;
+        let missingServices = [];
+        let message = '';
+        let lastEventTime = '';
+        const recentEvents = [];
+
+        // Scan bottom-up to find the most recent cluster status
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i];
+
+            // "Still missing [xxx, yyy]"
+            if (healthy === null && line.includes('Still missing [')) {
+                const match = line.match(/Still missing \[([^\]]+)\]/);
+                if (match) {
+                    healthy = false;
+                    missingServices = match[1].split(',').map(s => s.trim());
+                    message = `Missing: ${missingServices.join(', ')}`;
+                    const timeMatch = line.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+                    if (timeMatch) lastEventTime = timeMatch[1];
+                }
+            }
+
+            // "All providers are connected" or "We know all servers are there"
+            if (healthy === null && (line.includes('All providers are connected') || line.includes('We know all servers are there'))) {
+                healthy = true;
+                message = 'All providers connected';
+                const timeMatch = line.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+                if (timeMatch) lastEventTime = timeMatch[1];
+            }
+
+            // Collect recent cluster events (downed, removed, quarantined)
+            if (recentEvents.length < 10) {
+                if (line.includes('Member is Downed:') || line.includes('Member is Removed:') ||
+                    line.includes('quarantined this node') || line.includes('Shutting down myself') ||
+                    line.includes('SBR took decision')) {
+                    const timeMatch = line.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+                    const time = timeMatch ? timeMatch[1] : '';
+                    // Extract a short description
+                    let desc = '';
+                    if (line.includes('Member is Downed:')) {
+                        const m = line.match(/Member is Downed: \{([^}]+)\}/);
+                        desc = `Downed: ${m ? m[1] : '?'}`;
+                    } else if (line.includes('Member is Removed:')) {
+                        const m = line.match(/Member is Removed: \{([^}]+)\}.*ROLES_LOST \{([^}]*)\}/);
+                        desc = m ? `Removed: ${m[1]} (roles: ${m[2]})` : 'Member removed';
+                    } else if (line.includes('quarantined this node')) {
+                        desc = 'Node was quarantined';
+                    } else if (line.includes('Shutting down myself')) {
+                        desc = 'Cluster node shutting down';
+                    } else if (line.includes('SBR took decision')) {
+                        const m = line.match(/SBR took decision (\w+)/);
+                        desc = `SBR decision: ${m ? m[1] : '?'}`;
+                    }
+                    if (desc) recentEvents.push({ time, description: desc });
+                }
+            }
+        }
+
+        if (healthy === null) healthy = true; // No status messages found - assume OK
+
+        return {
+            healthy,
+            missingServices,
+            message,
+            lastEventTime,
+            recentEvents,
+        };
     }
 
     getLogPath() {

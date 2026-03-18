@@ -40,14 +40,21 @@ async function checkStatus() {
 
         const tomcatOk = data.tomcat.running;
         const tomcatReady = data.tomcat.ready;
+        const cluster = data.tomcat.cluster || {};
+        const clusterOk = cluster.healthy !== false;
         const memPct = data.system.memory.used / data.system.memory.total;
         const systemOk = memPct < 0.95;
 
-        const allOk = agentsOk && tomcatOk && tomcatReady && systemOk;
+        const allOk = agentsOk && tomcatOk && tomcatReady && clusterOk && systemOk;
 
         const problems = [];
         if (!tomcatOk) problems.push('Tomcat is down');
         else if (!tomcatReady) problems.push('Tomcat is starting (platform not ready)');
+        if (!clusterOk && cluster.missingServices && cluster.missingServices.length > 0) {
+            problems.push(`Akka cluster degraded: missing ${cluster.missingServices.join(', ')} — agents restart needed`);
+        } else if (!clusterOk) {
+            problems.push('Akka cluster degraded — agents restart needed');
+        }
         if (!systemOk) problems.push(`RAM at ${(memPct * 100).toFixed(0)}%`);
         const downAgents = monitored.filter(a => !a.running || !a.accessible);
         for (const a of downAgents) {

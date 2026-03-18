@@ -133,6 +133,22 @@
       </div>
     </section>
 
+    <section id="cluster-section">
+      <h2>Akka Cluster <button id="restart-agents-cluster-btn" class="restart-btn hidden" title="Restart all agents to recover cluster">&#x21bb; Restart Agents</button></h2>
+      <div id="cluster-status-card" class="stat-card full-width">
+        <div id="cluster-status-row" style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span id="cluster-status"></span>
+        </div>
+        <div id="cluster-missing" class="hidden"></div>
+        <div id="cluster-events-wrap" class="hidden">
+          <details>
+            <summary class="cluster-events-toggle">Recent cluster events</summary>
+            <div id="cluster-events"></div>
+          </details>
+        </div>
+      </div>
+    </section>
+
     <section id="agents-section">
       <h2>Agents <span id="agent-summary"></span> <button id="restart-all-agents-btn" class="restart-btn" title="Restart all agents">&#x21bb; Restart All</button></h2>
       <table id="agents-table">
@@ -189,6 +205,7 @@
   <script src="popup/renderers/system-stats.js"></script>
   <script src="popup/renderers/app-server.js"></script>
   <script src="popup/renderers/log-viewer.js"></script>
+  <script src="popup/renderers/cluster.js"></script>
   <script src="popup/renderers/processes.js"></script>
   <script src="popup/renderers/deploy.js"></script>
   <!-- Entry point (must be last) -->

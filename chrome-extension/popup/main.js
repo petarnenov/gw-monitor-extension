@@ -104,5 +104,6 @@ function render(data, lastCheck) {
 
     renderSystemStats(data.system);
     renderAppServer(data.tomcat);
+    renderCluster(data.tomcat.cluster);
     renderProcesses(data.agents);
 }
