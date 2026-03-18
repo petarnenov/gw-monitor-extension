@@ -50,6 +50,7 @@ const ApiClient = (() => {
         stopProcess: (name) => json('POST', `/stop/agent/${name}`, { timeout: 120000 }),
         restartProcess: (name) => json('POST', `/restart/agent/${name}`, { timeout: 120000 }),
         restartAllProcesses: () => json('POST', '/restart/agents', { timeout: 300000 }),
+        restartFullCluster: () => json('POST', '/restart/full-cluster', { timeout: 600000 }),
         updateProcessMemory: (name, memory) => json('PUT', `/config/agent/${name}/memory`, { body: { memory } }),
         updateProcessAutostart: (name, enabled) => json('PUT', `/config/agent/${name}/autostart`, { body: { enabled } }),
 

@@ -139,15 +139,13 @@ async function stopAgent(name, btn) {
 }
 
 async function restartAllAgents() {
-    if (!confirm('Restart ALL agents? This may take several minutes.')) return;
+    if (!confirm('Restart ALL agents?\nThis will: Stop Tomcat → Restart Agents → Start Tomcat.\nMay take several minutes.')) return;
     const btn = document.getElementById('restart-all-agents-btn');
     btn.disabled = true;
-    btn.textContent = '\u23F3 Restarting...';
 
     const bulkPendingNames = [];
     const stored = await AppStorage.get([StorageKeys.LAST_STATUS, StorageKeys.LAST_CHECK]);
     if (stored[StorageKeys.LAST_STATUS]) {
-        const now = Date.now();
         for (const a of stored[StorageKeys.LAST_STATUS].agents?.agents || []) {
             if (a.running || a.autostart !== false) {
                 if (!PendingAgents.has(a.name)) bulkPendingNames.push(a.name);
@@ -159,26 +157,28 @@ async function restartAllAgents() {
     }
 
     try {
-        const data = await ApiClient.restartAllProcesses();
+        btn.textContent = '\u23F3 Stopping Tomcat...';
+        const data = await ApiClient.restartFullCluster();
         if (data.ok) {
             btn.textContent = '\u23F3 Waiting...';
             startPollLoop();
         } else {
             btn.textContent = '\u2717 Failed';
-            showError('Agents restart failed: ' + data.message);
+            showError('Full cluster restart failed: ' + data.message);
             for (const n of bulkPendingNames) PendingAgents.remove(n);
             await PendingAgents.save();
         }
     } catch (e) {
         btn.textContent = '\u2717 Error';
-        showError('Agents restart error: ' + e.message);
+        showError('Full cluster restart error: ' + e.message);
         for (const n of bulkPendingNames) PendingAgents.remove(n);
         await PendingAgents.save();
     }
     setTimeout(() => {
         btn.disabled = false;
         btn.innerHTML = '&#x21bb; Restart All';
-    }, 3000);
+        refresh();
+    }, 5000);
 }
 
 async function editAgentMemory(name, current) {
