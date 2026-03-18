@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js --config ./config.yml"
   },
   "dependencies": {
     "express": "^5.2.1",

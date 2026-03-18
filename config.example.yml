@@ -1,0 +1,105 @@
+# Server Monitor — Example Configuration
+# Copy this file to config.yml and adjust values for your environment.
+#
+# Template variables: use {section.key} to reference other config values.
+# Example: "{paths.deploy_target}/logs" resolves to "/opt/myapp/logs"
+
+server:
+  port: 7103                    # Port for the monitor API server
+  name: "My Dev Server"        # Display name in the Chrome extension
+
+paths:
+  source: /opt/myapp/source              # Source code / git repo directory
+  deploy_target: /opt/myapp/server       # Deploy target (BEServer equivalent)
+  java_home: /usr/lib/jvm/java-17       # JAVA_HOME for builds and app server
+  gradle_cache: ~/.gradle/caches/modules-2/files-2.1  # Gradle dependency cache
+
+app_server:
+  type: tomcat                  # App server type (currently only: tomcat)
+  home: /opt/tomcat             # App server installation directory
+  port: 8080                    # App server HTTP port
+  health_check:
+    path: /health               # Endpoint to check if app is ready
+    expected_status: 200        # HTTP status code that means "ready"
+    timeout_ms: 5000            # Health check timeout
+  logs:
+    main: logs/catalina.out     # Main log file (relative to app_server.home)
+    access: "logs/localhost_access_log.{date}.txt"  # Access log pattern
+  webapps_dir: webapps          # Webapps directory name
+
+build:
+  type: gradle                  # Build tool type (currently only: gradle)
+  working_dir: "{paths.source}" # Directory to run build commands in
+  commands:
+    incremental: "./gradlew devClasses devLib jar"
+    jar_only: "./gradlew jar"
+    full_clean: "./gradlew clean"
+    full_build: "./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false"
+  output:
+    release_dir: build/release  # Full build output directory
+    dev_dir: devBuild           # Incremental build output directory
+    jar_dir: build/libs         # Directory containing the main JAR
+    jar_name: myapp.jar         # Name of the main JAR file
+
+deploy:
+  artifact_dirs:                # Directories to copy from source to deploy_target
+    - lib
+    - bin
+    - sbin
+    - etc
+  copy_to_app_server:           # Additional copies to app server
+    - source: WebContent
+      target: "{app_server.home}/webapps/ROOT"
+  startup_check:
+    max_attempts: 30            # How many times to poll after deploy
+    interval_ms: 2000           # Milliseconds between polls
+
+agents:
+  config_file: /opt/myapp/server.yml     # Agent configuration YAML
+  config_format: geowealth_yaml          # Config format parser to use
+  env_key: Dev                           # Environment key in config
+  server_key: Dev                        # Server key in config
+  log_dir: "{paths.deploy_target}/logs"  # Agent log directory
+  log_file: stdout.log                   # Log filename per agent
+  commands:
+    list: nfjobs                         # Command to list running agents
+    check: nfcheckall                    # Command to check agent accessibility
+    start: "nfstart {name}"             # Start agent (use {name} placeholder)
+    stop: "nfstop {name}"               # Stop agent
+    restart_all: "{paths.deploy_target}/sbin/restart_agents.sh"
+  env_vars:                              # Environment variables for agent commands
+    GEO_TEMPLATE_NAME: "{agents.config_file}"
+    GEO_ENV: "{agents.env_key}"
+    GEO_SERVER: "{agents.server_key}"
+
+git:
+  auth:
+    type: gitlab               # Git provider: gitlab | github | none
+    token_env: GITLAB_TOKEN    # Env var containing auth token
+    user_env: GITLAB_USER      # Env var containing username
+    default_user: oauth2       # Default username if env var not set
+  askpass_script: /tmp/gw-git-askpass.sh  # Path for GIT_ASKPASS helper
+
+thresholds:
+  ram_warning: 75              # RAM usage % for warning (yellow)
+  ram_danger: 90               # RAM usage % for danger (orange)
+  ram_critical: 95             # RAM usage % for critical (red)
+  bar_warning: 75              # Progress bar warning threshold
+  bar_danger: 90               # Progress bar danger threshold
+
+exec_whitelist:                # Allowed command prefixes for /exec endpoint
+  - "tail "
+  - "head "
+  - "cat "
+  - "df "
+  - "du "
+  - "ls "
+  - "wc "
+  - "git -C"
+  - "git stash"
+  - "git status"
+  - "git log"
+  - "git diff"
+  - "ps "
+  - "free "
+  - "uptime"

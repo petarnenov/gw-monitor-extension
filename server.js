@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
  * Server Status API — Express server that exposes system and agent
- * status as JSON for the GeoWealth Server Monitor Chrome extension.
+ * status as JSON for the Server Monitor Chrome extension.
  *
  * Usage:
- *   node server.js [--port 9876]
- *   nohup node server.js &
+ *   node server.js --config ./config.yml
+ *   node server.js --config ./config.yml --port 9876
+ *   nohup node server.js --config ./config.yml &
  */
 
 const express = require('express');
@@ -13,14 +14,20 @@ const { execSync, exec, spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const yaml = require('js-yaml');
+const { loadConfig } = require('./config');
+
+// ── Load configuration ──
+
+const configArg = process.argv.find(a => a.startsWith('--config='))
+    ?.split('=')[1]
+    || (process.argv.includes('--config')
+        ? process.argv[process.argv.indexOf('--config') + 1]
+        : './config.yml');
+
+const config = loadConfig(configArg);
 
 const PORT = parseInt(process.argv.includes('--port')
-    ? process.argv[process.argv.indexOf('--port') + 1] : '7103', 10);
-const BE_HOME = '/home/petar/AppServer/BEServer';
-const TOMCAT_PORT = 8080;
-const CONFIG_YML = process.env.GEO_TEMPLATE_NAME || '/home/petar/AppServer/petarServer.yml';
-const GEO_ENV = process.env.GEO_ENV || 'DevPetar';
-const GEO_SERVER = process.env.GEO_SERVER || 'DevPetar';
+    ? process.argv[process.argv.indexOf('--port') + 1] : config.server.port, 10);
 
 function runCmd(cmd, timeout = 10000) {
     try {
@@ -76,14 +83,16 @@ function getSystemInfo() {
     return { memory, disk, uptime_seconds, load_average, cpus };
 }
 
-const TOMCAT_HOME = '/home/petar/AppServer/apache-tomcat-9.0.38';
-
 function checkPlatformReady() {
+    const hc = config.app_server.health_check;
+    const checkPath = hc.path || '/platformOne/checkPlatformStatus.do';
+    const expectedStatus = hc.expected_status || 302;
+    const timeout = hc.timeout_ms || 5000;
+
     return new Promise((resolve) => {
-        const req = http.get(`http://localhost:${TOMCAT_PORT}/platformOne/checkPlatformStatus.do`, { timeout: 5000 }, (res) => {
+        const req = http.get(`http://localhost:${config.app_server.port}${checkPath}`, { timeout }, (res) => {
             res.resume();
-            // 302 = redirect to login = platform fully loaded
-            resolve(res.statusCode === 302);
+            resolve(res.statusCode === expectedStatus);
         });
         req.on('error', () => resolve(false));
         req.on('timeout', () => { req.destroy(); resolve(false); });
@@ -93,13 +102,13 @@ function checkPlatformReady() {
 function getTomcatStatus() {
     return new Promise((resolve) => {
         const start = Date.now();
-        const req = http.get(`http://localhost:${TOMCAT_PORT}/`, { timeout: 5000 }, async (res) => {
+        const req = http.get(`http://localhost:${config.app_server.port}/`, { timeout: 5000 }, async (res) => {
             res.resume();
             const elapsed = Date.now() - start;
             const proc = getTomcatProcess();
             const ready = res.statusCode === 200 ? await checkPlatformReady() : false;
             resolve({
-                http_port: TOMCAT_PORT, http_code: res.statusCode,
+                http_port: config.app_server.port, http_code: res.statusCode,
                 response_ms: elapsed, running: res.statusCode === 200,
                 ready,
                 process: proc,
@@ -112,7 +121,7 @@ function getTomcatStatus() {
         req.on('error', () => {
             const proc = getTomcatProcess();
             resolve({
-                http_port: TOMCAT_PORT, http_code: 0,
+                http_port: config.app_server.port, http_code: 0,
                 response_ms: Date.now() - start, running: false,
                 ready: false,
                 process: proc,
@@ -189,11 +198,12 @@ function getTomcatJvm(pid) {
 }
 
 function getDeployedWebapps() {
+    const webappsDir = `${config.app_server.home}/${config.app_server.webapps_dir || 'webapps'}`;
     try {
-        const dirs = fs.readdirSync(`${TOMCAT_HOME}/webapps`);
+        const dirs = fs.readdirSync(webappsDir);
         return dirs.filter(d => {
             try {
-                return fs.statSync(`${TOMCAT_HOME}/webapps/${d}`).isDirectory();
+                return fs.statSync(`${webappsDir}/${d}`).isDirectory();
             } catch { return false; }
         });
     } catch {
@@ -203,18 +213,25 @@ function getDeployedWebapps() {
 
 function getRequestsToday() {
     const today = new Date().toISOString().slice(0, 10);
-    const logFile = `${TOMCAT_HOME}/logs/localhost_access_log.${today}.txt`;
+    const accessLogPattern = config.app_server.logs && config.app_server.logs.access
+        ? config.app_server.logs.access.replace('{date}', today)
+        : `logs/localhost_access_log.${today}.txt`;
+    const logFile = `${config.app_server.home}/${accessLogPattern}`;
     const count = runCmd(`wc -l < "${logFile}" 2>/dev/null`);
     return parseInt(count, 10) || 0;
 }
 
 function getConfiguredAgents() {
+    if (!config.agents) return [];
+    const configFile = config.agents.config_file;
+    const envKey = config.agents.env_key;
+    const serverKey = config.agents.server_key;
     try {
-        const raw = fs.readFileSync(CONFIG_YML, 'utf8');
+        const raw = fs.readFileSync(configFile, 'utf8');
         const doc = yaml.load(raw);
-        const env = doc.environments[GEO_ENV];
+        const env = doc.environments[envKey];
         if (!env) return [];
-        const server = env.servers[GEO_SERVER];
+        const server = env.servers[serverKey];
         if (!server || !server.agents) return [];
         return server.agents.map(a => ({
             name: a.name,
@@ -229,7 +246,8 @@ function getConfiguredAgents() {
 }
 
 function updateAgentMemory(agentName, newMemory) {
-    const raw = fs.readFileSync(CONFIG_YML, 'utf8');
+    const configFile = config.agents.config_file;
+    const raw = fs.readFileSync(configFile, 'utf8');
     // Find the agent's max_memory line and update it
     const lines = raw.split('\n');
     let inAgent = false;
@@ -241,7 +259,7 @@ function updateAgentMemory(agentName, newMemory) {
         if (inAgent && lines[i].match(/^\s+max_memory:\s+/)) {
             const indent = lines[i].match(/^(\s+)/)[1];
             lines[i] = `${indent}max_memory: ${newMemory}`;
-            fs.writeFileSync(CONFIG_YML, lines.join('\n'), 'utf8');
+            fs.writeFileSync(configFile, lines.join('\n'), 'utf8');
             return true;
         }
     }
@@ -249,7 +267,8 @@ function updateAgentMemory(agentName, newMemory) {
 }
 
 function updateAgentAutostart(agentName, enabled) {
-    const raw = fs.readFileSync(CONFIG_YML, 'utf8');
+    const configFile = config.agents.config_file;
+    const raw = fs.readFileSync(configFile, 'utf8');
     const lines = raw.split('\n');
     let inAgent = false;
     let agentStartIdx = -1;
@@ -267,7 +286,7 @@ function updateAgentAutostart(agentName, enabled) {
                 const indent = lines[i].match(/^(\s+)/)[1];
                 lines[i] = `${indent}autostart: no_autostart`;
             }
-            fs.writeFileSync(CONFIG_YML, lines.join('\n'), 'utf8');
+            fs.writeFileSync(configFile, lines.join('\n'), 'utf8');
             return true;
         }
         // Hit next agent without finding autostart line
@@ -276,7 +295,7 @@ function updateAgentAutostart(agentName, enabled) {
                 // Need to add autostart: no_autostart after the previous agent's last property
                 const prevIndent = lines[agentStartIdx].match(/^(\s+-\s+)/)[0].replace('-', ' ');
                 lines.splice(i, 0, `${prevIndent}autostart: no_autostart`);
-                fs.writeFileSync(CONFIG_YML, lines.join('\n'), 'utf8');
+                fs.writeFileSync(configFile, lines.join('\n'), 'utf8');
                 return true;
             }
             // Autostart is already enabled (no line present means auto)
@@ -287,7 +306,7 @@ function updateAgentAutostart(agentName, enabled) {
     if (inAgent && !enabled) {
         const indent = lines[agentStartIdx].match(/^(\s+-\s+)/)[0].replace('-', ' ');
         lines.push(`${indent}autostart: no_autostart`);
-        fs.writeFileSync(CONFIG_YML, lines.join('\n'), 'utf8');
+        fs.writeFileSync(configFile, lines.join('\n'), 'utf8');
         return true;
     }
     if (inAgent && enabled) return true; // already autostart
@@ -295,8 +314,9 @@ function updateAgentAutostart(agentName, enabled) {
 }
 
 function getAgents() {
-    const nfjobsRaw = runCmd(`${BE_HOME}/sbin/nfjobs 2>/dev/null`);
-    const nfcheckRaw = runCmd(`${BE_HOME}/sbin/nfcheckall 2>/dev/null`);
+    const SBIN = config.paths.sbin;
+    const nfjobsRaw = runCmd(`${SBIN}/nfjobs 2>/dev/null`);
+    const nfcheckRaw = runCmd(`${SBIN}/nfcheckall 2>/dev/null`);
 
     // Get all configured agents from YAML
     const configured = getConfiguredAgents();
@@ -430,11 +450,28 @@ app.get('/ping', (_req, res) => {
     res.type('text/plain').send('pong');
 });
 
+// ── Client config endpoint (new in Phase 1) ──
+
+app.get('/config/client', (_req, res) => {
+    res.json({
+        name: config.server.name,
+        app_server_type: config.app_server.type,
+        build_type: config.build.type,
+        has_agents: !!config.agents,
+        has_deploy: !!config.deploy,
+        thresholds: config.thresholds || {},
+    });
+});
+
 // ── Restart endpoints ──
 
-const TOMCAT_BIN = `${TOMCAT_HOME}/bin`;
-const SBIN = `${BE_HOME}/sbin`;
-const ENV_VARS = `GEO_TEMPLATE_NAME="${process.env.GEO_TEMPLATE_NAME || '/home/petar/AppServer/petarServer.yml'}" GEO_ENV="${process.env.GEO_ENV || 'DevPetar'}" GEO_SERVER="${process.env.GEO_SERVER || 'DevPetar'}"`;
+const TOMCAT_BIN = config.app_server.bin_dir;
+const SBIN = config.paths.sbin;
+
+// Build ENV_VARS string for agent commands
+const agentEnvVars = config.agents && config.agents.env_vars
+    ? Object.entries(config.agents.env_vars).map(([k, v]) => `${k}="${v}"`).join(' ')
+    : '';
 
 function runAsync(cmd, timeout = 120000) {
     return new Promise((resolve, reject) => {
@@ -496,7 +533,7 @@ app.post('/stop/agent/:name', async (req, res) => {
     if (!/^[a-z][a-z0-9]*$/.test(name)) {
         return res.status(400).json({ ok: false, message: 'Invalid agent name' });
     }
-    const pidFile = `${BE_HOME}/pids/${name}.pid`;
+    const pidFile = `${config.paths.pids}/${name}.pid`;
     if (!fs.existsSync(pidFile)) {
         return res.status(404).json({ ok: false, message: `Agent "${name}" not found or not running` });
     }
@@ -518,7 +555,7 @@ app.post('/restart/agent/:name', async (req, res) => {
         return res.status(400).json({ ok: false, message: 'Invalid agent name' });
     }
     // Check agent exists
-    const pidFile = `${BE_HOME}/pids/${name}.pid`;
+    const pidFile = `${config.paths.pids}/${name}.pid`;
     if (!fs.existsSync(pidFile)) {
         return res.status(404).json({ ok: false, message: `Agent "${name}" not found` });
     }
@@ -526,7 +563,7 @@ app.post('/restart/agent/:name', async (req, res) => {
         console.log(`[restart] Stopping agent ${name}...`);
         await runAsync(`${SBIN}/nfstop ${name} 2>&1`, 60000);
         console.log(`[restart] Starting agent ${name}...`);
-        await runAsync(`${ENV_VARS} ${SBIN}/nfstart ${name} 2>&1`, 60000);
+        await runAsync(`${agentEnvVars} ${SBIN}/nfstart ${name} 2>&1`, 60000);
         console.log(`[restart] Agent ${name} start command completed, accessibility will be checked by client`);
         res.json({ ok: true, message: `Agent "${name}" restarted` });
     } catch (e) {
@@ -539,7 +576,10 @@ app.post('/restart/agent/:name', async (req, res) => {
 app.post('/restart/agents', async (_req, res) => {
     try {
         console.log('[restart] Restarting all agents...');
-        await runAsync(`${ENV_VARS} ${SBIN}/restart_agents.sh 2>&1`, 300000);
+        const restartCmd = config.agents && config.agents.commands && config.agents.commands.restart_all
+            ? config.agents.commands.restart_all
+            : `${SBIN}/restart_agents.sh`;
+        await runAsync(`${agentEnvVars} ${restartCmd} 2>&1`, 300000);
         res.json({ ok: true, message: 'All agents restarted' });
     } catch (e) {
         console.error('[restart] All agents restart failed:', e.message);
@@ -644,13 +684,7 @@ app.post('/system/free-ram', async (_req, res) => {
 
 // ── Command execution ──
 
-const ALLOWED_CMD_PREFIXES = [
-    'tail ', 'head ', 'cat ', 'df ', 'du ', 'ls ', 'wc ',
-    'git -C', 'git stash', 'git status', 'git log', 'git diff',
-    'cd /home/petar/AppServer',
-    './gradlew',
-    'ps ', 'free ', 'uptime',
-];
+const ALLOWED_CMD_PREFIXES = config.exec_whitelist || [];
 
 app.post('/exec', (req, res) => {
     const cmd = (req.body.cmd || '').trim();
@@ -664,7 +698,7 @@ app.post('/exec', (req, res) => {
         return res.status(403).json({ ok: false, output: `Command not allowed: ${cmd}` });
     }
     try {
-        const output = execSync(cmd, { timeout: 30000, encoding: 'utf8', env: DEPLOY_ENV, cwd: GEO_DIR }).trim();
+        const output = execSync(cmd, { timeout: 30000, encoding: 'utf8', env: DEPLOY_ENV, cwd: config.paths.source }).trim();
         res.json({ ok: true, output: output || '(no output)' });
     } catch (e) {
         res.json({ ok: false, output: e.stderr || e.stdout || e.message });
@@ -673,13 +707,16 @@ app.post('/exec', (req, res) => {
 
 // ── Log endpoints ──
 
-const TOMCAT_LOGS = `${TOMCAT_HOME}/logs`;
-const AGENT_LOGS = `${BE_HOME}/logs`;
+const TOMCAT_LOGS = config.app_server.logs_dir;
+const AGENT_LOGS = config.paths.logs;
 
 app.get('/logs/tomcat', (req, res) => {
     const lines = parseInt(req.query.lines, 10) || 200;
     const capped = Math.min(lines, 2000);
-    const logFile = `${TOMCAT_LOGS}/catalina.out`;
+    const mainLog = config.app_server.logs && config.app_server.logs.main
+        ? config.app_server.logs.main
+        : 'logs/catalina.out';
+    const logFile = `${config.app_server.home}/${mainLog}`;
     try {
         const output = runCmd(`tail -n ${capped} "${logFile}" 2>/dev/null`, 15000);
         res.type('text/plain').send(output || '(empty)');
@@ -695,9 +732,10 @@ app.get('/logs/agent/:name', (req, res) => {
     }
     const lines = parseInt(req.query.lines, 10) || 200;
     const capped = Math.min(lines, 2000);
-    const logFile = `${AGENT_LOGS}/${name}/stdout.log`;
+    const logFileName = config.agents && config.agents.log_file ? config.agents.log_file : 'stdout.log';
+    const logFile = `${AGENT_LOGS}/${name}/${logFileName}`;
     if (!fs.existsSync(logFile)) {
-        return res.status(404).type('text/plain').send(`Log not found: ${name}/stdout.log`);
+        return res.status(404).type('text/plain').send(`Log not found: ${name}/${logFileName}`);
     }
     try {
         const output = runCmd(`tail -n ${capped} "${logFile}" 2>/dev/null`, 15000);
@@ -734,17 +772,17 @@ app.put('/config/agent/:name/memory', (req, res) => {
 
 // ── Deploy / Branch management ──
 
-const GEO_DIR = '/home/petar/AppServer/geowealth';
-const JAVA_HOME = '/home/petar/AppServer/amazon-corretto-17.0.18.9.1-linux-x64';
+const GEO_DIR = config.paths.source;
+const JAVA_HOME = config.paths.java_home;
 
-// GitLab credentials from environment — enables HTTPS auth for git fetch/pull.
-// Set GITLAB_TOKEN (personal access token or deploy token) and optionally GITLAB_USER.
-const GITLAB_TOKEN = process.env.GITLAB_TOKEN || '';
-const GITLAB_USER = process.env.GITLAB_USER || 'oauth2';
+// Git auth credentials from environment
+const gitAuth = config.git && config.git.auth ? config.git.auth : {};
+const GITLAB_TOKEN = process.env[gitAuth.token_env || 'GITLAB_TOKEN'] || '';
+const GITLAB_USER = process.env[gitAuth.user_env || 'GITLAB_USER'] || (gitAuth.default_user || 'oauth2');
 
 // If a token is available, set up GIT_ASKPASS so git commands authenticate via HTTPS.
 // Also switch the remote URL from SSH to HTTPS if needed.
-const GIT_ASKPASS_SCRIPT = '/tmp/gw-git-askpass.sh';
+const GIT_ASKPASS_SCRIPT = (config.git && config.git.askpass_script) || '/tmp/gw-git-askpass.sh';
 if (GITLAB_TOKEN) {
     fs.writeFileSync(GIT_ASKPASS_SCRIPT, `#!/bin/sh\ncase "$1" in\n*Username*) echo "${GITLAB_USER}";;\n*Password*) echo "${GITLAB_TOKEN}";;\nesac\n`, { mode: 0o700 });
 
@@ -753,6 +791,7 @@ if (GITLAB_TOKEN) {
     process.env.GIT_TERMINAL_PROMPT = '0';
 
     // Switch remote from SSH to HTTPS if currently SSH
+    const gitAuthType = gitAuth.type || 'gitlab';
     const currentUrl = runCmd(`git -C "${GEO_DIR}" remote get-url origin`);
     const sshMatch = currentUrl.match(/^git@gitlab\.com:(.+?)(?:\.git)?$/);
     if (sshMatch) {
@@ -766,9 +805,7 @@ const DEPLOY_ENV = {
     ...process.env,
     JAVA_HOME,
     PATH: `${JAVA_HOME}/bin:${process.env.PATH}`,
-    GEO_TEMPLATE_NAME: CONFIG_YML,
-    GEO_ENV,
-    GEO_SERVER,
+    ...(config.agents && config.agents.env_vars ? config.agents.env_vars : {}),
     ...(GITLAB_TOKEN ? { GIT_ASKPASS: GIT_ASKPASS_SCRIPT, GIT_TERMINAL_PROMPT: '0' } : {}),
 };
 
@@ -903,20 +940,23 @@ app.post('/quick-deploy', async (req, res) => {
 });
 
 async function runQuickDeploy(agents, restartTomcat) {
+    const BE_HOME = config.paths.deploy_target;
     const startTime = Date.now();
     const step = (name) => logDeploy(`\n── ${name} ──`);
 
     // 1. Gradle jar
     step('Step 1/4 — Gradle jar');
     try {
-        const out = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew jar 2>&1`, 120000);
+        const jarCmd = config.build.commands.jar_only || './gradlew jar';
+        const out = await execSyncDeploy(`cd "${GEO_DIR}" && ${jarCmd} 2>&1`, 120000);
         logDeploy(lastLines(out, 5));
         logDeploy('Jar built successfully');
     } catch (e) {
         throw new Error(`Gradle jar failed:\n${lastLines(e.message, 15)}`);
     }
 
-    const jarPath = `${GEO_DIR}/build/libs/geowealth.jar`;
+    const jarName = config.build.output.jar_name || 'geowealth.jar';
+    const jarPath = `${GEO_DIR}/${config.build.output.jar_dir}/${jarName}`;
     if (!fs.existsSync(jarPath)) {
         throw new Error(`Jar not found at ${jarPath}`);
     }
@@ -924,9 +964,9 @@ async function runQuickDeploy(agents, restartTomcat) {
     // 2. Copy jar to BEServer/lib and Tomcat
     step('Step 2/4 — Copying jar');
     try {
-        await execSyncDeploy(`cp "${jarPath}" "${BE_HOME}/lib/geowealth.jar"`, 10000);
+        await execSyncDeploy(`cp "${jarPath}" "${BE_HOME}/lib/${jarName}"`, 10000);
         logDeploy(`Copied to ${BE_HOME}/lib/`);
-        await execSyncDeploy(`cp "${jarPath}" "${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib/geowealth.jar"`, 10000);
+        await execSyncDeploy(`cp "${jarPath}" "${config.app_server.home}/webapps/ROOT/WEB-INF/lib/${jarName}"`, 10000);
         logDeploy(`Copied to Tomcat WEB-INF/lib/`);
     } catch (e) {
         throw new Error(`Jar copy failed:\n${e.message}`);
@@ -945,7 +985,7 @@ async function runQuickDeploy(agents, restartTomcat) {
         try {
             logDeploy(`Restarting ${name}...`);
             await runAsync(`${SBIN}/nfstop ${name} 2>&1`, 60000).catch(() => {});
-            await runAsync(`${ENV_VARS} ${SBIN}/nfstart ${name} 2>&1`, 60000);
+            await runAsync(`${agentEnvVars} ${SBIN}/nfstart ${name} 2>&1`, 60000);
             logDeploy(`${name} restarted`);
         } catch (e) {
             logDeploy(`WARNING: ${name} restart failed: ${e.message}`);
@@ -969,7 +1009,7 @@ async function runQuickDeploy(agents, restartTomcat) {
                 await runAsync('sleep 2');
             }
             // Clean stale PID files
-            runCmd(`rm -f ${TOMCAT_HOME}/bin/*.pid`);
+            runCmd(`rm -f ${config.app_server.home}/bin/*.pid`);
             logDeploy('Starting Tomcat...');
             await runAsync(`${TOMCAT_BIN}/startup.sh 2>&1`);
             logDeploy('Tomcat started');
@@ -989,6 +1029,7 @@ function logDeploy(msg) {
 }
 
 async function runDeploy(branch) {
+    const BE_HOME = config.paths.deploy_target;
     const step = (name) => logDeploy(`\n── ${name} ──`);
     const startTime = Date.now();
     const originalBranch = runCmdStrict(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
@@ -1023,6 +1064,7 @@ async function runDeploy(branch) {
 }
 
 async function runDeploySteps(branch, step, startTime, originalBranch, setStashed, setHiddenFiles) {
+    const BE_HOME = config.paths.deploy_target;
     let stashed = false;
 
     // 1. Stash local changes (including assume-unchanged / skip-worktree files)
@@ -1130,7 +1172,7 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
     // 5. Stop Tomcat
     step('Step 5/8 — Stopping Tomcat');
     try {
-        runCmd(`${TOMCAT_HOME}/bin/shutdown.sh 2>&1`, 15000);
+        runCmd(`${config.app_server.home}/bin/shutdown.sh 2>&1`, 15000);
         logDeploy('Shutdown signal sent');
     } catch {
         logDeploy('Shutdown script returned error (Tomcat may not be running)');
@@ -1142,7 +1184,8 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
     let incremental = false;
     logDeploy('Trying incremental build (devClasses + devLib + jar)...');
     try {
-        const incOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew devClasses devLib jar 2>&1`, 300000);
+        const incCmd = config.build.commands.incremental || './gradlew devClasses devLib jar';
+        const incOut = await execSyncDeploy(`cd "${GEO_DIR}" && ${incCmd} 2>&1`, 300000);
         logDeploy(lastLines(incOut, 5));
         incremental = true;
         logDeploy('Incremental build succeeded');
@@ -1150,13 +1193,15 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
         logDeploy(`Incremental build failed: ${lastLines(e.message, 5)}`);
         logDeploy('Falling back to full build...');
         try {
-            const cleanOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew clean 2>&1`, 120000);
+            const cleanCmd = config.build.commands.full_clean || './gradlew clean';
+            const cleanOut = await execSyncDeploy(`cd "${GEO_DIR}" && ${cleanCmd} 2>&1`, 120000);
             logDeploy(lastLines(cleanOut, 3));
         } catch (e2) {
             throw new Error(`Gradle clean failed:\n${lastLines(e2.message, 15)}`);
         }
         try {
-            const buildOut = await execSyncDeploy(`cd "${GEO_DIR}" && ./gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false 2>&1`, 600000);
+            const buildCmd = config.build.commands.full_build || './gradlew makebuild -Pbuild_react=false -Pbuild_sencha=false';
+            const buildOut = await execSyncDeploy(`cd "${GEO_DIR}" && ${buildCmd} 2>&1`, 600000);
             logDeploy(lastLines(buildOut, 5));
         } catch (e2) {
             const compileError = e2.message.match(/error:.*$/gm);
@@ -1169,17 +1214,22 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
     }
 
     // Verify build output exists
+    const devDir = config.build.output.dev_dir || 'devBuild';
+    const releaseDir = config.build.output.release_dir || 'build/release';
+    const jarDir = config.build.output.jar_dir || 'build/libs';
+    const jarName = config.build.output.jar_name || 'geowealth.jar';
+
     if (incremental) {
-        if (!fs.existsSync(`${GEO_DIR}/devBuild/lib`)) {
-            throw new Error('Incremental build output missing: devBuild/lib not found.');
+        if (!fs.existsSync(`${GEO_DIR}/${devDir}/lib`)) {
+            throw new Error(`Incremental build output missing: ${devDir}/lib not found.`);
         }
-        if (!fs.existsSync(`${GEO_DIR}/build/libs/geowealth.jar`)) {
-            throw new Error('Incremental build output missing: build/libs/geowealth.jar not found.');
+        if (!fs.existsSync(`${GEO_DIR}/${jarDir}/${jarName}`)) {
+            throw new Error(`Incremental build output missing: ${jarDir}/${jarName} not found.`);
         }
-        const jarCount = runCmd(`ls "${GEO_DIR}/devBuild/lib/"*.jar 2>/dev/null | wc -l`);
-        logDeploy(`Incremental build: ${jarCount} dependency JAR(s) + geowealth.jar`);
+        const jarCount = runCmd(`ls "${GEO_DIR}/${devDir}/lib/"*.jar 2>/dev/null | wc -l`);
+        logDeploy(`Incremental build: ${jarCount} dependency JAR(s) + ${jarName}`);
     } else {
-        const buildDir = `${GEO_DIR}/build/release`;
+        const buildDir = `${GEO_DIR}/${releaseDir}`;
         if (!fs.existsSync(`${buildDir}/lib`)) {
             throw new Error(`Build output missing: ${buildDir}/lib not found.\nGradle may have succeeded but produced no artifacts. Check build.gradle.`);
         }
@@ -1189,9 +1239,10 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
 
     // 7. Copy artifacts
     step('Step 7/8 — Copying artifacts');
+    const agentConfigFile = config.agents ? config.agents.config_file : '';
     const libCopyCmd = incremental
-        ? `mkdir -p "${BE_HOME}/lib" && cp -r ./devBuild/lib/* "${BE_HOME}/lib/" && cp ./build/libs/geowealth.jar "${BE_HOME}/lib/"`
-        : `cp -r ./build/release/lib "${BE_HOME}"`;
+        ? `mkdir -p "${BE_HOME}/lib" && cp -r ./${devDir}/lib/* "${BE_HOME}/lib/" && cp ./${jarDir}/${jarName} "${BE_HOME}/lib/"`
+        : `cp -r ./${releaseDir}/lib "${BE_HOME}"`;
     try {
         await execSyncDeploy(`
             cd "${GEO_DIR}" &&
@@ -1210,7 +1261,7 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
             cp -r ./templates "${BE_HOME}" &&
             cp -r ./exports "${BE_HOME}" &&
             cp -r ./WebContent "${BE_HOME}" &&
-            cp "${CONFIG_YML}" "${BE_HOME}/etc/" &&
+            cp "${agentConfigFile}" "${BE_HOME}/etc/" &&
             cp ./etc/*.properties "${BE_HOME}/etc/" &&
             cp ./src/main/resources/*.properties "${BE_HOME}/etc/" &&
             cp ./etc/hibernate-dbhost.properties "${BE_HOME}/etc/hibernate.properties" &&
@@ -1261,23 +1312,24 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
     }
 
     // Copy WebContent to Tomcat
+    const tomcatWebapps = `${config.app_server.home}/webapps/ROOT`;
     try {
         if (incremental) {
             // Incremental: copy WebContent from source tree, then overlay fresh JARs
             await execSyncDeploy(`
-                rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* &&
-                cp -r "${GEO_DIR}/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/" &&
-                mkdir -p "${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib" &&
-                cp -r "${GEO_DIR}/devBuild/lib/"* "${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib/" &&
-                cp "${GEO_DIR}/build/libs/geowealth.jar" "${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib/"
+                rm -rf "${tomcatWebapps}/"* &&
+                cp -r "${GEO_DIR}/WebContent/"* "${tomcatWebapps}/" &&
+                mkdir -p "${tomcatWebapps}/WEB-INF/lib" &&
+                cp -r "${GEO_DIR}/${devDir}/lib/"* "${tomcatWebapps}/WEB-INF/lib/" &&
+                cp "${GEO_DIR}/${jarDir}/${jarName}" "${tomcatWebapps}/WEB-INF/lib/"
             `, 30000);
-            logDeploy('WebContent deployed to Tomcat (incremental: source + devBuild JARs)');
+            logDeploy(`WebContent deployed to Tomcat (incremental: source + ${devDir} JARs)`);
         } else {
-            await execSyncDeploy(`rm -rf "${TOMCAT_HOME}/webapps/ROOT/"* && cp -r "${GEO_DIR}/build/release/WebContent/"* "${TOMCAT_HOME}/webapps/ROOT/"`, 30000);
+            await execSyncDeploy(`rm -rf "${tomcatWebapps}/"* && cp -r "${GEO_DIR}/${releaseDir}/WebContent/"* "${tomcatWebapps}/"`, 30000);
             logDeploy('WebContent deployed to Tomcat (full build)');
         }
     } catch (e) {
-        throw new Error(`Failed to copy WebContent to Tomcat:\n${e.message}\n\nCheck if ${TOMCAT_HOME}/webapps/ROOT/ is writable.`);
+        throw new Error(`Failed to copy WebContent to Tomcat:\n${e.message}\n\nCheck if ${tomcatWebapps} is writable.`);
     }
 
     // Fix known corrupted JARs
@@ -1286,19 +1338,22 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
     // 8. Start Tomcat
     step('Step 8/8 — Starting Tomcat');
     try {
-        await execSyncDeploy(`rm -f "${TOMCAT_HOME}/catalina_pid.txt" && ${TOMCAT_HOME}/bin/startup.sh 2>&1`, 15000);
+        await execSyncDeploy(`rm -f "${config.app_server.home}/catalina_pid.txt" && ${config.app_server.home}/bin/startup.sh 2>&1`, 15000);
         logDeploy('Tomcat startup initiated');
     } catch (e) {
-        throw new Error(`Tomcat failed to start:\n${e.message}\n\nCheck catalina.out for details:\n  tail -50 ${TOMCAT_HOME}/logs/catalina.out`);
+        throw new Error(`Tomcat failed to start:\n${e.message}\n\nCheck catalina.out for details:\n  tail -50 ${config.app_server.home}/logs/catalina.out`);
     }
 
     // Wait a moment and verify Tomcat is responding
     logDeploy('Waiting for Tomcat to become available...');
+    const startupCheck = config.deploy && config.deploy.startup_check ? config.deploy.startup_check : {};
+    const maxAttempts = startupCheck.max_attempts || 30;
+    const intervalMs = startupCheck.interval_ms || 2000;
     let tomcatOk = false;
-    for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 2000));
+    for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(r => setTimeout(r, intervalMs));
         try {
-            const code = runCmd(`curl -s -o /dev/null -w "%{http_code}" http://localhost:${TOMCAT_PORT}/ 2>/dev/null`);
+            const code = runCmd(`curl -s -o /dev/null -w "%{http_code}" http://localhost:${config.app_server.port}/ 2>/dev/null`);
             if (code === '200') {
                 tomcatOk = true;
                 break;
@@ -1309,8 +1364,8 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
     if (tomcatOk) {
         logDeploy('Tomcat is UP and responding (HTTP 200)');
     } else {
-        logDeploy('WARNING: Tomcat did not respond with HTTP 200 after 60s');
-        logDeploy(`Check logs: tail -100 ${TOMCAT_HOME}/logs/catalina.out`);
+        logDeploy(`WARNING: Tomcat did not respond with HTTP 200 after ${maxAttempts * intervalMs / 1000}s`);
+        logDeploy(`Check logs: tail -100 ${config.app_server.home}/logs/catalina.out`);
     }
 
     const finalBranch = runCmd(`git -C "${GEO_DIR}" rev-parse --abbrev-ref HEAD`);
@@ -1321,8 +1376,8 @@ async function runDeploySteps(branch, step, startTime, originalBranch, setStashe
 }
 
 function fixCorruptedJars() {
-    const GRADLE_CACHE = '/home/petar/.gradle/caches/modules-2/files-2.1';
-    const tomcatLib = `${TOMCAT_HOME}/webapps/ROOT/WEB-INF/lib`;
+    const BE_HOME = config.paths.deploy_target;
+    const tomcatLib = `${config.app_server.home}/webapps/ROOT/WEB-INF/lib`;
     const beLib = `${BE_HOME}/lib`;
 
     // Find all JARs in tomcat lib and verify against gradle cache originals
@@ -1393,5 +1448,5 @@ async function waitForTomcatStop() {
 }
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server Status API listening on :${PORT}`);
+    console.log(`${config.server.name} API listening on :${PORT}`);
 });
