@@ -16,16 +16,9 @@ class TomcatAdapter extends AppServerAdapter {
         await runAsync(`${this.binDir}/startup.sh 2>&1`);
     }
 
-    async stop(gracePeriodMs = 15000) {
+    async stop(gracePeriodMs = 30000) {
         await runAsync(`${this.binDir}/shutdown.sh 2>&1`, 30000).catch(() => {});
-        await runAsync('sleep 5');
-        const pids = runCmd("pgrep -f catalina.startup.Bootstrap");
-        if (pids) {
-            for (const pid of pids.split('\n').filter(Boolean)) {
-                await runAsync(`kill -9 ${pid} 2>/dev/null`).catch(() => {});
-            }
-            await runAsync('sleep 2');
-        }
+        await this.waitForStop(gracePeriodMs);
     }
 
     getProcessInfo() {
@@ -160,11 +153,11 @@ class TomcatAdapter extends AppServerAdapter {
         }
     }
 
-    async waitForStop() {
+    async waitForStop(timeoutMs = 30000) {
         const pids = runCmd("pgrep -f catalina.startup.Bootstrap");
         if (!pids) return;
-        const pidList = pids.split('\n').filter(Boolean);
-        for (let i = 0; i < 30; i++) {
+        const maxAttempts = Math.ceil(timeoutMs / 1000);
+        for (let i = 0; i < maxAttempts; i++) {
             const alive = runCmd("pgrep -f catalina.startup.Bootstrap");
             if (!alive) return;
             await new Promise(r => setTimeout(r, 1000));
