@@ -1,9 +1,9 @@
 {
   "name": "server-status",
   "version": "1.0.0",
-  "main": "server.js",
+  "main": "server/index.js",
   "scripts": {
-    "start": "node server.js --config ./config.yml"
+    "start": "node server/index.js --config ./config.yml"
   },
   "dependencies": {
     "express": "^5.2.1",
