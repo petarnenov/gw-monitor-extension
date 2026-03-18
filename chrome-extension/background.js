@@ -8,7 +8,7 @@ let prevHealthy = true;
 let prevProblems = [];
 
 chrome.runtime.onInstalled.addListener(() => {
-    chrome.alarms.create('checkStatus', { periodInMinutes: 1 });
+    chrome.alarms.create('checkStatus', { periodInMinutes: 0.5 });
     checkStatus();
 });
 
