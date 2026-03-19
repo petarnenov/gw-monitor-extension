@@ -270,6 +270,8 @@ class GradleAdapter extends BuildAdapter {
         if (appServerCfg.akka_config_file) {
             lines.push(`CATALINA_OPTS="$CATALINA_OPTS -Dakka.config.file=${appServerCfg.akka_config_file}"`);
         }
+        lines.push('CATALINA_OPTS="$CATALINA_OPTS -Dhttps.redirect.forced=no"');
+        lines.push('CATALINA_OPTS="$CATALINA_OPTS -Deval.code.used=no"');
         lines.push('');
 
         fs.writeFileSync(setenvPath, lines.join('\n'), { mode: 0o755 });
