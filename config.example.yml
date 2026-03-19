@@ -17,7 +17,10 @@ paths:
 app_server:
   type: tomcat                  # App server type (currently only: tomcat)
   home: /opt/tomcat             # App server installation directory
+  version: "9.0.100"            # Tomcat version (for display/logging)
   port: 8080                    # App server HTTP port
+  netfolio_home: /opt/myapp/server  # Value for -Dnetfolio.home (resolves etc/, WebContent, etc.)
+  akka_config_file: dev-myname-akka.conf  # Akka HOCON config file name (in {netfolio_home}/etc/)
   health_check:
     path: /health               # Endpoint to check if app is ready
     expected_status: 200        # HTTP status code that means "ready"
