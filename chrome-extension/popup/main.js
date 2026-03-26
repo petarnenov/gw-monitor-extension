@@ -13,6 +13,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('free-ram-btn').addEventListener('click', freeRam);
     document.getElementById('clear-swap-btn').addEventListener('click', clearSwap);
     document.getElementById('restart-server-btn').addEventListener('click', restartServer);
+    document.getElementById('logs-server-btn').addEventListener('click', () => openLogViewer('server'));
+    document.getElementById('logs-server-err-btn').addEventListener('click', () => openLogViewer('server-error'));
     document.getElementById('logs-tomcat-btn').addEventListener('click', () => openLogViewer('tomcat'));
     document.getElementById('log-close-btn').addEventListener('click', closeLogViewer);
     document.getElementById('log-modal-backdrop').addEventListener('click', closeLogViewer);

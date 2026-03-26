@@ -76,9 +76,11 @@ const ApiClient = (() => {
 
         // Logs
         getLogs: (type, name, lines = 200) => {
-            const path = type === 'tomcat'
-                ? `/logs/tomcat?lines=${lines}`
-                : `/logs/agent/${name}?lines=${lines}`;
+            let path;
+            if (type === 'tomcat') path = `/logs/tomcat?lines=${lines}`;
+            else if (type === 'server') path = `/logs/server?lines=${lines}`;
+            else if (type === 'server-error') path = `/logs/server?type=error&lines=${lines}`;
+            else path = `/logs/agent/${name}?lines=${lines}`;
             return text('GET', path, { timeout: 15000 });
         },
 

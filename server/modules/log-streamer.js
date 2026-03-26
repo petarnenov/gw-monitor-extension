@@ -1,7 +1,30 @@
 const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { runCmd } = require('../utils');
 
 function registerRoutes(app, config, adapters) {
+    app.get('/logs/server', (req, res) => {
+        const lines = parseInt(req.query.lines, 10) || 200;
+        const capped = Math.min(lines, 2000);
+        const logType = req.query.type === 'error' ? 'error' : 'out';
+
+        // Try PM2 log paths
+        const pm2Home = process.env.PM2_HOME || path.join(os.homedir(), '.pm2');
+        const appName = config.pm2?.app_name || 'gw-monitor';
+        const logFile = path.join(pm2Home, 'logs', `${appName}-${logType}.log`);
+
+        if (!fs.existsSync(logFile)) {
+            return res.status(404).type('text/plain').send(`Server log not found: ${logFile}`);
+        }
+        try {
+            const output = runCmd(`tail -n ${capped} "${logFile}" 2>/dev/null`, 15000);
+            res.type('text/plain').send(output || '(empty)');
+        } catch {
+            res.status(500).type('text/plain').send('Error reading server log');
+        }
+    });
+
     app.get('/logs/tomcat', (req, res) => {
         const lines = parseInt(req.query.lines, 10) || 200;
         const capped = Math.min(lines, 2000);

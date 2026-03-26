@@ -9,7 +9,11 @@ const LOG_ERROR_RE = /\b(error|exception|fatal|fail(ed|ure)?|crash|panic|severe|
 async function openLogViewer(type, name) {
     currentLogType = type;
     currentLogName = name;
-    const title = type === 'tomcat' ? 'Tomcat — catalina.out' : `Agent — ${name}/stdout.log`;
+    let title;
+    if (type === 'tomcat') title = 'Tomcat — catalina.out';
+    else if (type === 'server') title = 'Monitor Server — stdout';
+    else if (type === 'server-error') title = 'Monitor Server — stderr';
+    else title = `Agent — ${name}/stdout.log`;
     document.getElementById('log-modal-title').textContent = title;
     document.getElementById('log-modal').classList.remove('hidden');
     await fetchLogs();
