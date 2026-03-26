@@ -1,3 +1,11 @@
+let restartState = { in_progress: false, log: [], phase: null, started_agents: [], coordinator_ready: false };
+
+function logRestart(msg) {
+    const ts = new Date().toLocaleTimeString();
+    restartState.log.push(`[${ts}] ${msg}`);
+    console.log(`[full-cluster] ${msg}`);
+}
+
 function registerRoutes(app, config, adapters) {
     const pm = adapters.processManager;
     if (!pm) return; // No process manager configured
@@ -53,39 +61,87 @@ function registerRoutes(app, config, adapters) {
     });
 
     app.post('/restart/full-cluster', async (_req, res) => {
+        if (restartState.in_progress) {
+            return res.status(409).json({ ok: false, message: 'Restart already in progress' });
+        }
         const appServer = adapters.appServer;
+        restartState = { in_progress: true, log: [], phase: 'stopping', started_agents: [], coordinator_ready: false };
+        res.json({ ok: true, message: 'Full cluster restart started' });
+
         try {
-            // Step 1: Check if Tomcat is running, stop it first
+            // Step 1: Stop Tomcat
             const tomcatStatus = await appServer.getStatus();
             if (tomcatStatus.running) {
-                console.log('[full-cluster] Step 1/3: Stopping Tomcat...');
+                logRestart('Step 1/3: Stopping Tomcat...');
                 await appServer.stop();
-                console.log('[full-cluster] Tomcat stopped.');
+                logRestart('Tomcat stopped.');
             } else {
-                console.log('[full-cluster] Step 1/3: Tomcat already stopped.');
+                logRestart('Step 1/3: Tomcat already stopped.');
             }
 
-            // Step 2: Restart all agents (coordinator first, wait for it to be ready)
-            console.log('[full-cluster] Step 2/3: Restarting all agents (coordinator first)...');
-            await pm.restartAll((msg) => console.log(`[full-cluster] ${msg}`));
+            // Step 2: Restart agents (coordinator first)
+            logRestart('Step 2/3: Restarting all agents (coordinator first)...');
+            await pm.restartAll((msg) => {
+                logRestart(msg);
+                // Phase tracking
+                if (msg.match(/^Starting coordinator/)) {
+                    restartState.phase = 'coordinator';
+                    if (!restartState.started_agents.includes('coordinator')) {
+                        restartState.started_agents.push('coordinator');
+                    }
+                } else if (msg.includes('Coordinator ready') || msg.includes('Coordinator PID alive (no Akka port') || msg.includes('WARNING: Coordinator may not be fully ready')) {
+                    restartState.coordinator_ready = true;
+                    restartState.phase = 'agents';
+                }
+                // Track individual agent starts ("Starting <name>...")
+                const m = msg.match(/^Starting (\w+)\.\.\.$/);
+                if (m && !restartState.started_agents.includes(m[1])) {
+                    restartState.started_agents.push(m[1]);
+                }
+            });
 
             // Step 3: Start Tomcat
-            console.log('[full-cluster] Step 3/3: Starting Tomcat...');
+            logRestart('Step 3/3: Starting Tomcat...');
+            restartState.phase = 'tomcat';
             await appServer.start();
-            console.log('[full-cluster] Tomcat started. Full cluster restart complete.');
-
-            res.json({ ok: true, message: 'Full cluster restart complete (Tomcat stopped → agents restarted → Tomcat started)' });
+            logRestart('Full cluster restart complete.');
+            restartState.phase = 'complete';
         } catch (e) {
-            console.error('[full-cluster] Full cluster restart failed:', e.message);
-            // Try to start Tomcat even if something failed
+            logRestart(`FAILED: ${e.message}`);
+            restartState.phase = 'failed';
             try {
-                console.log('[full-cluster] Attempting Tomcat recovery start...');
+                logRestart('Attempting Tomcat recovery start...');
                 await appServer.start();
             } catch (startErr) {
-                console.error('[full-cluster] Tomcat recovery start also failed:', startErr.message);
+                logRestart(`Tomcat recovery start also failed: ${startErr.message}`);
             }
-            res.status(500).json({ ok: false, message: e.message });
+        } finally {
+            restartState.in_progress = false;
         }
+    });
+
+    app.get('/restart/full-cluster/status', (_req, res) => {
+        res.json(restartState);
+    });
+
+    app.get('/restart/full-cluster/stream', (req, res) => {
+        res.set({
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+        });
+        res.flushHeaders();
+
+        const interval = setInterval(() => {
+            res.write(`data: ${JSON.stringify(restartState)}\n\n`);
+            if (!restartState.in_progress) {
+                clearInterval(interval);
+                res.write('event: done\ndata: {}\n\n');
+                res.end();
+            }
+        }, 1000);
+
+        req.on('close', () => clearInterval(interval));
     });
 
     app.put('/config/agent/:name/autostart', (req, res) => {

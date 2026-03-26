@@ -139,46 +139,116 @@ async function stopAgent(name, btn) {
 }
 
 async function restartAllAgents() {
-    if (!confirm('Restart ALL agents?\nThis will: Stop Tomcat → Restart Agents → Start Tomcat.\nMay take several minutes.')) return;
+    if (!confirm('Restart ALL agents?\nThis will: Stop Tomcat \u2192 Start Coordinator \u2192 Wait for ready \u2192 Start Agents \u2192 Start Tomcat.\nMay take several minutes.')) return;
     const btn = document.getElementById('restart-all-agents-btn');
     btn.disabled = true;
-
-    const bulkPendingNames = [];
-    const stored = await AppStorage.get([StorageKeys.LAST_STATUS, StorageKeys.LAST_CHECK]);
-    if (stored[StorageKeys.LAST_STATUS]) {
-        for (const a of stored[StorageKeys.LAST_STATUS].agents?.agents || []) {
-            if (a.running || a.autostart !== false) {
-                if (!PendingAgents.has(a.name)) bulkPendingNames.push(a.name);
-                PendingAgents.mark(a.name);
-            }
-        }
-        await PendingAgents.save();
-        render(stored[StorageKeys.LAST_STATUS], stored[StorageKeys.LAST_CHECK]);
-    }
+    btn.textContent = '\u23F3 Starting...';
 
     try {
-        btn.textContent = '\u23F3 Stopping Tomcat...';
         const data = await ApiClient.restartFullCluster();
-        if (data.ok) {
-            btn.textContent = '\u23F3 Waiting...';
-            startPollLoop();
-        } else {
-            btn.textContent = '\u2717 Failed';
+        if (!data.ok) {
             showError('Full cluster restart failed: ' + data.message);
-            for (const n of bulkPendingNames) PendingAgents.remove(n);
-            await PendingAgents.save();
+            btn.textContent = '\u2717 Failed';
+            setTimeout(() => { btn.disabled = false; btn.innerHTML = '&#x21bb; Restart All'; }, 5000);
+            return;
         }
+        streamRestartProgress(btn);
     } catch (e) {
-        btn.textContent = '\u2717 Error';
         showError('Full cluster restart error: ' + e.message);
-        for (const n of bulkPendingNames) PendingAgents.remove(n);
-        await PendingAgents.save();
+        btn.textContent = '\u2717 Error';
+        setTimeout(() => { btn.disabled = false; btn.innerHTML = '&#x21bb; Restart All'; }, 5000);
     }
+}
+
+const RESTART_PHASE_LABELS = {
+    stopping: '\u23F3 Stopping agents...',
+    coordinator: '\u23F3 Starting coordinator...',
+    agents: '\u23F3 Starting agents...',
+    tomcat: '\u23F3 Starting Tomcat...',
+    complete: '\u2713 Complete',
+    failed: '\u2717 Failed',
+};
+
+function updateRestartUI(data, btn) {
+    const logEl = document.getElementById('restart-log');
+    logEl.textContent = data.log.join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+
+    if (data.phase) {
+        btn.textContent = RESTART_PHASE_LABELS[data.phase] || '\u23F3 Working...';
+    }
+
+    // Mark started agents as pending
+    for (const name of data.started_agents || []) {
+        if (!PendingAgents.has(name)) {
+            PendingAgents.mark(name);
+        }
+    }
+
+    // Coordinator ready — remove from pending so poll can show it as green
+    if (data.coordinator_ready && PendingAgents.has('coordinator')) {
+        PendingAgents.remove('coordinator');
+    }
+}
+
+function onRestartDone(btn) {
+    PendingAgents.save();
+    startPollLoop();
     setTimeout(() => {
         btn.disabled = false;
         btn.innerHTML = '&#x21bb; Restart All';
         refresh();
-    }, 5000);
+    }, 3000);
+    setTimeout(() => document.getElementById('restart-log-wrap').classList.add('hidden'), 15000);
+}
+
+function streamRestartProgress(btn) {
+    const logWrap = document.getElementById('restart-log-wrap');
+    logWrap.classList.remove('hidden');
+    document.getElementById('restart-log').textContent = 'Connecting...';
+
+    ApiClient.createRestartStream().then(es => {
+        es.onmessage = (e) => {
+            updateRestartUI(JSON.parse(e.data), btn);
+        };
+        es.addEventListener('done', () => {
+            es.close();
+            onRestartDone(btn);
+        });
+        es.onerror = () => {
+            es.close();
+            pollRestartProgress(btn);
+        };
+    }).catch(() => {
+        pollRestartProgress(btn);
+    });
+}
+
+function pollRestartProgress(btn) {
+    const logWrap = document.getElementById('restart-log-wrap');
+    logWrap.classList.remove('hidden');
+
+    const poll = setInterval(async () => {
+        try {
+            const data = await ApiClient.getRestartStatus();
+            updateRestartUI(data, btn);
+            if (!data.in_progress) {
+                clearInterval(poll);
+                onRestartDone(btn);
+            }
+        } catch { /* retry */ }
+    }, 2000);
+}
+
+async function checkRestartStatus() {
+    try {
+        const data = await ApiClient.getRestartStatus();
+        if (data.in_progress) {
+            const btn = document.getElementById('restart-all-agents-btn');
+            btn.disabled = true;
+            streamRestartProgress(btn);
+        }
+    } catch { /* ignore */ }
 }
 
 async function editAgentMemory(name, current) {

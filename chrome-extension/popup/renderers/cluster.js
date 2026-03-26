@@ -62,24 +62,7 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
-// Restart agents button handler (cluster recovery)
-document.getElementById('restart-agents-cluster-btn').addEventListener('click', async () => {
-    if (!confirm('Recover Akka cluster?\nThis will: Stop Tomcat \u2192 Restart Agents \u2192 Start Tomcat.\nMay take several minutes.')) return;
-    const btn = document.getElementById('restart-agents-cluster-btn');
-    btn.disabled = true;
-    btn.textContent = '\u23F3 Stopping Tomcat...';
-    try {
-        const data = await ApiClient.restartFullCluster();
-        btn.textContent = data.ok ? '\u2713 Done' : '\u2717 Failed';
-        if (data.ok) startPollLoop();
-        if (!data.ok) showError('Cluster recovery failed: ' + data.message);
-    } catch (e) {
-        btn.textContent = '\u2717 Error';
-        showError('Cluster recovery error: ' + e.message);
-    }
-    setTimeout(() => {
-        btn.disabled = false;
-        btn.innerHTML = '&#x21bb; Restart Agents';
-        refresh();
-    }, 5000);
+// Restart agents button handler (cluster recovery) — delegates to restartAllAgents() in processes.js
+document.getElementById('restart-agents-cluster-btn').addEventListener('click', () => {
+    restartAllAgents();
 });

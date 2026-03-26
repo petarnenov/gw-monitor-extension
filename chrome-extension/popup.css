@@ -497,7 +497,7 @@ section { margin-bottom: 12px; }
   color: var(--bar-warn);
   margin-top: 2px;
 }
-#deploy-log-wrap {
+#deploy-log-wrap, #restart-log-wrap {
   margin-top: 8px;
   max-height: 200px;
   overflow: auto;
@@ -505,7 +505,7 @@ section { margin-bottom: 12px; }
   border-radius: 4px;
   background: var(--bg-body);
 }
-#deploy-log {
+#deploy-log, #restart-log {
   padding: 8px;
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 11px;

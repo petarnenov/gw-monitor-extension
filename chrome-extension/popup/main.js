@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await PendingAgents.load();
     await loadBranches();
     await checkDeployStatus();
+    await checkRestartStatus();
     await loadAndRender();
     resumePendingPolls();
 });

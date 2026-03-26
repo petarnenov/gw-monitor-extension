@@ -50,7 +50,12 @@ const ApiClient = (() => {
         stopProcess: (name) => json('POST', `/stop/agent/${name}`, { timeout: 120000 }),
         restartProcess: (name) => json('POST', `/restart/agent/${name}`, { timeout: 120000 }),
         restartAllProcesses: () => json('POST', '/restart/agents', { timeout: 300000 }),
-        restartFullCluster: () => json('POST', '/restart/full-cluster', { timeout: 600000 }),
+        restartFullCluster: () => json('POST', '/restart/full-cluster', { timeout: 30000 }),
+        getRestartStatus: () => json('GET', '/restart/full-cluster/status'),
+        createRestartStream: async () => {
+            const baseUrl = await getBaseUrl();
+            return new EventSource(`${baseUrl}/restart/full-cluster/stream`);
+        },
         updateProcessMemory: (name, memory) => json('PUT', `/config/agent/${name}/memory`, { body: { memory } }),
         updateProcessAutostart: (name, enabled) => json('PUT', `/config/agent/${name}/autostart`, { body: { enabled } }),
 
