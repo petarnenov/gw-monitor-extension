@@ -17,8 +17,14 @@ class ProcessManagerAdapter {
     /** Stop a process by name. */
     async stopProcess(name) { throw new Error('Not implemented'); }
 
-    /** Restart all processes. */
-    async restartAll() { throw new Error('Not implemented'); }
+    /** Restart all processes. Accepts optional log function for progress reporting. */
+    async restartAll(log) { throw new Error('Not implemented'); }
+
+    /** Get the coordinator process name, or null if not applicable. */
+    getCoordinatorName() { return null; }
+
+    /** Wait for coordinator process to be ready. Returns true if ready within timeout. */
+    async waitForCoordinator(timeoutMs, log) { return true; }
 
     /** Update memory config for a process. Returns true if found and updated. */
     updateMemory(name, value) { throw new Error('Not implemented'); }

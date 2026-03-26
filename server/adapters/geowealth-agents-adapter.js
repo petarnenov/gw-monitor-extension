@@ -33,6 +33,7 @@ class GeoWealthAgentsAdapter extends ProcessManagerAdapter {
                 autostart: a.autostart !== 'no_autostart',
                 jvm_params: a.jvm_params || null,
                 restart_if_dead: a.restart_if_dead === 'yes' || a.restart_if_dead === true,
+                akka_port: a.akka_port || null,
             }));
         } catch {
             return [];
@@ -109,11 +110,92 @@ class GeoWealthAgentsAdapter extends ProcessManagerAdapter {
         await runAsync(`${this.sbin}/nfstop ${name} 2>&1`, 60000);
     }
 
-    async restartAll() {
-        const restartCmd = this.agentConfig.commands && this.agentConfig.commands.restart_all
-            ? this.agentConfig.commands.restart_all
-            : `${this.sbin}/restart_agents.sh`;
-        await runAsync(`${this.envVars} ${restartCmd} 2>&1`, 300000);
+    async restartAll(log) {
+        log = log || console.log;
+        const configured = this.getConfiguredProcesses();
+        const coordinatorName = this.getCoordinatorName();
+
+        // Step 1: Stop all agents
+        log('Stopping all agents...');
+        const stopCmd = this.agentConfig.commands?.stop_all || `${this.sbin}/nfstopall`;
+        await runAsync(`${stopCmd} 2>&1`, 120000);
+        log('All agents stopped.');
+
+        // Step 2: Start coordinator first and wait for it to be ready
+        if (coordinatorName) {
+            const coordConfig = configured.find(a => a.name === coordinatorName);
+            if (coordConfig && coordConfig.autostart) {
+                log(`Starting coordinator (${coordinatorName}) first...`);
+                await this.startProcess(coordinatorName);
+                const ready = await this.waitForCoordinator(90000, log);
+                if (!ready) {
+                    log('WARNING: Coordinator may not be fully ready. Proceeding with remaining agents...');
+                }
+            }
+        }
+
+        // Step 3: Start remaining autostart agents
+        const remaining = configured.filter(a => a.name !== coordinatorName && a.autostart);
+        for (const agent of remaining) {
+            log(`Starting ${agent.name}...`);
+            await this.startProcess(agent.name);
+        }
+        log('All agents started.');
+    }
+
+    getCoordinatorName() {
+        const configured = this.getConfiguredProcesses();
+        const coord = configured.find(a => a.name === 'coordinator');
+        return coord ? coord.name : null;
+    }
+
+    async waitForCoordinator(timeoutMs = 90000, log = console.log) {
+        const configured = this.getConfiguredProcesses();
+        const coordConfig = configured.find(a => a.name === 'coordinator');
+        if (!coordConfig) return true;
+
+        const akkaPort = coordConfig.akka_port;
+        const intervalMs = 3000;
+        const maxAttempts = Math.ceil(timeoutMs / intervalMs);
+
+        for (let i = 1; i <= maxAttempts; i++) {
+            await new Promise(r => setTimeout(r, intervalMs));
+
+            if (!this._isProcessAlive('coordinator')) {
+                log(`Coordinator process not alive yet... (${i}/${maxAttempts})`);
+                continue;
+            }
+
+            if (akkaPort) {
+                if (this._isPortListening(akkaPort)) {
+                    log(`Coordinator ready (PID alive, Akka port ${akkaPort} listening)`);
+                    return true;
+                }
+                log(`Coordinator PID alive but Akka port ${akkaPort} not yet listening... (${i}/${maxAttempts})`);
+            } else {
+                // No akka_port configured — PID alive is best we can check, add small buffer
+                log('Coordinator PID alive (no Akka port configured, waiting 5s extra)');
+                await new Promise(r => setTimeout(r, 5000));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    _isProcessAlive(name) {
+        const pidFile = `${this.pidsDir}/${name}.pid`;
+        try {
+            if (!fs.existsSync(pidFile)) return false;
+            const pid = fs.readFileSync(pidFile, 'utf8').trim();
+            return runCmd(`kill -0 ${pid} 2>/dev/null && echo alive`) === 'alive';
+        } catch {
+            return false;
+        }
+    }
+
+    _isPortListening(port) {
+        const result = runCmd(`ss -tln 2>/dev/null | grep -c ':${port}\\b'`);
+        return parseInt(result, 10) > 0;
     }
 
     updateMemory(name, value) {

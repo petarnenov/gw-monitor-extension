@@ -44,11 +44,19 @@ async function runQuickDeploy(config, adapters, agentNames, restartAppServer) {
         throw new Error(`Jar copy failed:\n${e.message}`);
     }
 
-    // 3. Restart requested agents
+    // 3. Restart requested agents (coordinator first if present)
     step('Step 3/4 — Restarting agents');
     if (agentNames.length === 0 || !pm) {
         logDeploy('No agents selected for restart, skipping');
     } else {
+        // Move coordinator to front if present
+        const coordIdx = agentNames.indexOf('coordinator');
+        if (coordIdx > 0) {
+            agentNames.splice(coordIdx, 1);
+            agentNames.unshift('coordinator');
+            logDeploy('Reordered: coordinator will start first');
+        }
+
         for (const name of agentNames) {
             if (!/^[a-z][a-z0-9]*$/.test(name)) {
                 logDeploy(`Skipping invalid agent name: ${name}`);
@@ -59,6 +67,12 @@ async function runQuickDeploy(config, adapters, agentNames, restartAppServer) {
                 await pm.stopProcess(name).catch(() => {});
                 await pm.startProcess(name);
                 logDeploy(`${name} restarted`);
+
+                // Wait for coordinator to be ready before starting other agents
+                if (name === 'coordinator' && agentNames.length > 1 && typeof pm.waitForCoordinator === 'function') {
+                    logDeploy('Waiting for coordinator to become ready...');
+                    await pm.waitForCoordinator(90000, logDeploy);
+                }
             } catch (e) {
                 logDeploy(`WARNING: ${name} restart failed: ${e.message}`);
             }

@@ -43,9 +43,9 @@ function registerRoutes(app, config, adapters) {
 
     app.post('/restart/agents', async (_req, res) => {
         try {
-            console.log('[restart] Restarting all agents...');
-            await pm.restartAll();
-            res.json({ ok: true, message: 'All agents restarted' });
+            console.log('[restart] Restarting all agents (coordinator first)...');
+            await pm.restartAll((msg) => console.log(`[restart] ${msg}`));
+            res.json({ ok: true, message: 'All agents restarted (coordinator first)' });
         } catch (e) {
             console.error('[restart] All agents restart failed:', e.message);
             res.status(500).json({ ok: false, message: e.message });
@@ -65,11 +65,9 @@ function registerRoutes(app, config, adapters) {
                 console.log('[full-cluster] Step 1/3: Tomcat already stopped.');
             }
 
-            // Step 2: Restart all agents
-            console.log('[full-cluster] Step 2/3: Restarting all agents...');
-            await pm.restartAll();
-            console.log('[full-cluster] Agents restarted, waiting 10s for cluster formation...');
-            await new Promise(r => setTimeout(r, 10000));
+            // Step 2: Restart all agents (coordinator first, wait for it to be ready)
+            console.log('[full-cluster] Step 2/3: Restarting all agents (coordinator first)...');
+            await pm.restartAll((msg) => console.log(`[full-cluster] ${msg}`));
 
             // Step 3: Start Tomcat
             console.log('[full-cluster] Step 3/3: Starting Tomcat...');
