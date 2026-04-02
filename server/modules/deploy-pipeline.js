@@ -140,7 +140,7 @@ async function runDeploySteps(config, adapters, branch, step, startTime, origina
     let stashed = false;
 
     // 1. Stash local changes
-    step('Step 1/8 — Checking for local changes');
+    step('Step 1/9 — Checking for local changes');
     const assumeUnchanged = runCmd(`git -C "${GEO_DIR}" ls-files -v | grep "^[a-z]" | awk '{print $2}'`);
     const skipWorktree = runCmd(`git -C "${GEO_DIR}" ls-files -v | grep "^S" | awk '{print $2}'`);
     const hiddenFiles = [assumeUnchanged, skipWorktree].filter(Boolean).join('\n').split('\n').filter(Boolean);
@@ -176,7 +176,7 @@ async function runDeploySteps(config, adapters, branch, step, startTime, origina
     setHiddenFiles(hiddenFiles);
 
     // 2. Fetch
-    step('Step 2/8 — Fetching latest branches');
+    step('Step 2/9 — Fetching latest branches');
     try {
         const fetchOut = runCmdStrict(`git -C "${GEO_DIR}" fetch --prune 2>&1`, 30000);
         logDeploy(fetchOut || 'Fetch complete');
@@ -186,7 +186,7 @@ async function runDeploySteps(config, adapters, branch, step, startTime, origina
     }
 
     // 3. Checkout and pull
-    step(`Step 3/8 — Switching to branch: ${branch}`);
+    step(`Step 3/9 — Switching to branch: ${branch}`);
     logDeploy(`Current branch: ${originalBranch}`);
     if (branch !== originalBranch) {
         try {
@@ -214,7 +214,7 @@ async function runDeploySteps(config, adapters, branch, step, startTime, origina
 
     // 4. Apply stash
     if (stashed) {
-        step('Step 4/8 — Applying stashed changes');
+        step('Step 4/9 — Applying stashed changes');
         try {
             const popOut = runCmdStrict(`git -C "${GEO_DIR}" stash pop 2>&1`);
             logDeploy(popOut || 'Stash applied successfully');
@@ -236,7 +236,7 @@ async function runDeploySteps(config, adapters, branch, step, startTime, origina
     }
 
     // 5. Stop app server
-    step('Step 5/8 — Stopping app server');
+    step('Step 5/9 — Stopping app server');
     try {
         runCmd(`${config.app_server.home}/bin/shutdown.sh 2>&1`, 15000);
         logDeploy('Shutdown signal sent');
@@ -247,7 +247,7 @@ async function runDeploySteps(config, adapters, branch, step, startTime, origina
     logDeploy('App server stopped');
 
     // 6. Build (incremental first, full as fallback)
-    step('Step 6/8 — Build');
+    step('Step 6/9 — Build');
     let incremental = false;
     logDeploy('Trying incremental build...');
     const incResult = await build.buildIncremental(logDeploy);
@@ -265,14 +265,23 @@ async function runDeploySteps(config, adapters, branch, step, startTime, origina
     logDeploy(verifyMsg);
 
     // 7. Copy artifacts
-    step('Step 7/8 — Copying artifacts');
+    step('Step 7/9 — Copying artifacts');
     await build.copyArtifacts(logDeploy, incremental);
     await build.postDeploy(logDeploy);
     await build.copyToAppServer(logDeploy, incremental);
     build.verifyArtifacts(logDeploy);
 
-    // 8. Start app server
-    step('Step 8/8 — Starting app server');
+    // 8. Restart agents (coordinator first, then the rest)
+    step('Step 8/9 — Restarting agents');
+    const pm = adapters.processManager;
+    if (pm) {
+        await pm.restartAll(logDeploy);
+    } else {
+        logDeploy('WARNING: No process manager configured, skipping agent restart');
+    }
+
+    // 9. Start app server
+    step('Step 9/9 — Starting app server');
     try {
         await build._exec(`rm -f "${config.app_server.home}/catalina_pid.txt"`, 5000);
         await appServer.start();

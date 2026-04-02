@@ -164,7 +164,7 @@ async function startPull() {
 
 async function startDeploy() {
     if (!selectedBranch) return;
-    if (!confirm(`Deploy branch "${selectedBranch}"?\n\nThis will:\n- Pull latest changes\n- Gradle clean + build\n- Copy artifacts\n- Restart Tomcat`)) return;
+    if (!confirm(`Deploy branch "${selectedBranch}"?\n\nThis will:\n- Pull latest changes\n- Gradle clean + build\n- Copy artifacts\n- Restart agents (coordinator first)\n- Restart Tomcat`)) return;
 
     const btn = document.getElementById('deploy-btn');
     btn.disabled = true;
